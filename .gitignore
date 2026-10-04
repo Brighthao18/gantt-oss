@@ -1,0 +1,32 @@
+# Machine-specific configuration and credentials
+wrangler.jsonc
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+.claude/
+.codex/
+
+# Dependencies, output, and local evidence
+node_modules/
+.wrangler/
+dist/
+dist-worker/
+test-results/
+playwright-report/
+Codex/work/
+Codex/outputs/
+*.log
+.DS_Store
+Thumbs.db
+
+# Historical personal deployment records and one-off email scripts
+EMAIL_DEPLOYMENT_SUMMARY.md
+EMAIL_OPTIMIZATION_REPORT.md
+EXPORT_INTEGRATION_GUIDE.md
+createExportCanvasV2.js
+test-email*.js

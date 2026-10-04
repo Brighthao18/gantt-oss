@@ -1,0 +1,28 @@
+{
+  "name": "gantt-oss",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-first Gantt project planner with optional JSONBin sync and Cloudflare email reminders.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Brighthao18/gantt-oss.git"
+  },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "node --test tests/unit/*.test.mjs",
+    "test:e2e": "playwright test",
+    "verify": "npm run check && npm test && npm run build",
+    "worker:dev": "wrangler dev --config wrangler.jsonc",
+    "worker:check": "wrangler deploy --dry-run --config wrangler.example.jsonc --outdir dist-worker",
+    "worker:deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "wrangler": "4.147.0"
+  }
+}

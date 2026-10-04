@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gantt-task-reminder",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "vars": {
+    "REMINDER_TIMEZONE": "Asia/Shanghai"
+  },
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  }
+}

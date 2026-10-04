@@ -1,0 +1,24 @@
+name: Bug report / 问题反馈
+description: Report a reproducible problem with fictional data.
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交真实密钥或个人数据。安全漏洞请使用私密报告渠道。
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果 / Expected and actual behavior
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 浏览器、系统与版本 / Browser, OS, and version
+    validations:
+      required: true

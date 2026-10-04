@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>研究生项目管理 - 甘特图</title>
+    <meta name="description" content="面向研究生的课程和科研项目管理工具，甘特图可视化进度追踪">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1 class="logo">🎯 项目管理</h1>
+                <div class="user-info" id="userInfo">
+                    <span class="user-avatar" id="userAvatar">👤</span>
+                    <span class="user-name" id="userName">未登录</span>
+                    <button class="btn-icon btn-logout" id="logoutBtn" title="退出登录" style="display: none;">🚪</button>
+                </div>
+            </div>
+            <!-- 汇总视图入口 -->
+            <div class="summary-view-entry" id="summaryViewEntry">
+                <span class="summary-icon">📊</span>
+                <span class="summary-name">汇总视图</span>
+            </div>
+            <div class="projects-section">
+                <div class="section-header">
+                    <span>📁 我的项目</span>
+                    <button class="btn-icon" id="addProjectBtn" title="新建项目">+</button>
+                </div>
+                <ul class="project-list" id="projectList">
+                    <!-- 项目列表动态生成 -->
+                </ul>
+            </div>
+            <div class="sidebar-footer">
+                <div class="sync-buttons">
+                    <button class="btn-sync" id="uploadBtn" title="上传到云端">
+                        <span class="sync-icon">☁️</span>
+                        <span>上传云端</span>
+                    </button>
+                    <button class="btn-sync" id="downloadBtn" title="下载到本地">
+                        <span class="sync-icon">📥</span>
+                        <span>下载本地</span>
+                    </button>
+                </div>
+                <div class="auto-sync-status" id="autoSyncStatus">
+                    <span class="sync-dot"></span>
+                    <span class="sync-text">自动同步已启用</span>
+                </div>
+                <button class="btn-settings" id="settingsBtn">⚙️ 设置</button>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 顶部工具栏 -->
+            <header class="toolbar">
+                <div class="toolbar-left">
+                    <h2 class="current-project-name" id="currentProjectName">选择一个项目</h2>
+                </div>
+                <div class="toolbar-right">
+                    <div class="view-controls">
+                        <button class="btn-view active" data-view="day">日</button>
+                        <button class="btn-view" data-view="week">周</button>
+                        <button class="btn-view" data-view="month">月</button>
+                    </div>
+                    <button class="btn-icon-text" id="exportBtn" title="导出甘特图">
+                        <span>📤</span>
+                        <span>导出</span>
+                    </button>
+                    <button class="btn-primary" id="addTaskBtn">+ 添加任务</button>
+                </div>
+            </header>
+
+            <!-- 甘特图区域 -->
+            <div class="gantt-container" id="ganttContainer">
+                <div class="gantt-empty-state" id="emptyState">
+                    <div class="empty-icon">📊</div>
+                    <h3>开始管理你的项目</h3>
+                    <p>创建一个新项目或选择现有项目来查看甘特图</p>
+                    <button class="btn-primary" id="emptyAddProject">+ 创建第一个项目</button>
+                </div>
+
+                <!-- 甘特图头部（时间轴） -->
+                <div class="gantt-header" id="ganttHeader" style="display: none;">
+                    <div class="gantt-task-header">任务名称</div>
+                    <div class="gantt-timeline-header" id="timelineHeader">
+                        <!-- 时间刻度动态生成 -->
+                    </div>
+                </div>
+
+                <!-- 甘特图主体 -->
+                <div class="gantt-body" id="ganttBody" style="display: none;">
+                    <div class="gantt-tasks" id="ganttTasks">
+                        <!-- 任务行动态生成 -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 任务编辑模态框 -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">添加任务</h3>
+                <button class="btn-close" id="closeModal">&times;</button>
+            </div>
+            <form class="modal-body task-form-scrollable" id="taskForm">
+                <div class="form-group">
+                    <label for="taskName">任务名称</label>
+                    <input type="text" id="taskName" placeholder="例如：完成开题报告" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="startDate">开始时间</label>
+                        <input type="datetime-local" id="startDate" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="endDate">结束时间</label>
+                        <input type="datetime-local" id="endDate" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskColor">颜色</label>
+                    <div class="color-picker" id="colorPicker">
+                        <button type="button" class="color-option active" data-color="#6366f1"
+                            style="background: #6366f1"></button>
+                        <button type="button" class="color-option" data-color="#8b5cf6"
+                            style="background: #8b5cf6"></button>
+                        <button type="button" class="color-option" data-color="#ec4899"
+                            style="background: #ec4899"></button>
+                        <button type="button" class="color-option" data-color="#14b8a6"
+                            style="background: #14b8a6"></button>
+                        <button type="button" class="color-option" data-color="#f59e0b"
+                            style="background: #f59e0b"></button>
+                        <button type="button" class="color-option" data-color="#ef4444"
+                            style="background: #ef4444"></button>
+                        <button type="button" class="color-custom" id="customColorBtn" title="自定义颜色">
+                            <span>🎨</span>
+                        </button>
+                        <input type="color" id="customColorPicker" style="display: none;">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="taskNotes">备注</label>
+                    <textarea id="taskNotes" rows="2" placeholder="可选：添加任务备注"></textarea>
+                </div>
+
+                <!-- 任务重复设置 -->
+                <div class="form-group">
+                    <label for="taskRecurrence">🔄 任务重复</label>
+                    <select id="taskRecurrence">
+                        <option value="0">不重复（一次性任务）</option>
+                        <option value="1">每天</option>
+                        <option value="7">每周</option>
+                        <option value="14">每两周</option>
+                        <option value="30">每月</option>
+                        <option value="90">每季度</option>
+                        <option value="180">每半年</option>
+                        <option value="365">每年</option>
+                        <option value="custom">自定义周期</option>
+                    </select>
+                    <div class="custom-input-row" id="recurrenceCustomRow" style="display: none;">
+                        <span>每</span>
+                        <input type="number" id="recurrenceCustomDays" min="1" max="365" value="14"
+                            style="width: 60px;">
+                        <span>天重复一次</span>
+                    </div>
+                    <small class="form-hint">循环任务会自动在甘特图上显示多个周期</small>
+                </div>
+
+                <!-- 提醒设置 -->
+                <div class="form-section">
+                    <div class="form-section-header">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="reminderEnabled">
+                            <span>🔔 启用到期提醒</span>
+                        </label>
+                    </div>
+                    <div class="reminder-settings" id="reminderSettings" style="display: none;">
+                        <div class="form-group">
+                            <label>提醒方式</label>
+                            <div class="checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="reminderBrowser" checked>
+                                    <span>浏览器通知</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="reminderEmail">
+                                    <span>邮件通知</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>提醒时间（可多选）</label>
+                            <div class="checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="remind0" value="0">
+                                    <span>到期当天</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="remind1" value="1" checked>
+                                    <span>提前1天</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="remind3" value="3">
+                                    <span>提前3天</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="remind7" value="7">
+                                    <span>提前1周</span>
+                                </label>
+                            </div>
+                            <div class="custom-input-row">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="remindCustom">
+                                    <span>自定义：提前</span>
+                                </label>
+                                <input type="number" id="remindCustomDays" min="1" max="365" value="14"
+                                    style="width: 60px;">
+                                <span>天</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <input type="hidden" id="taskId">
+                <input type="hidden" id="taskColorValue" value="#6366f1">
+            </form>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancelTask">取消</button>
+                <button class="btn-danger" id="deleteTask" style="display: none;">删除</button>
+                <button class="btn-primary" id="saveTask">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 项目编辑模态框 -->
+    <div class="modal-overlay" id="projectModal">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3 id="projectModalTitle">新建项目</h3>
+                <button class="btn-close" id="closeProjectModal">&times;</button>
+            </div>
+            <form class="modal-body" id="projectForm">
+                <div class="form-group">
+                    <label for="projectName">项目名称</label>
+                    <input type="text" id="projectName" placeholder="例如：毕业论文" required>
+                </div>
+                <input type="hidden" id="projectId">
+            </form>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancelProject">取消</button>
+                <button class="btn-danger" id="deleteProject" style="display: none;">删除</button>
+                <button class="btn-primary" id="saveProject">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置模态框 -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>云端同步设置</h3>
+                <button class="btn-close" id="closeSettingsModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="jsonbinApiKey">JSONBin.io API Key</label>
+                    <input type="password" id="jsonbinApiKey" placeholder="输入你的 API Key">
+                    <small class="form-hint">
+                        <a href="https://jsonbin.io/" target="_blank" rel="noopener noreferrer">注册 JSONBin.io</a> 获取 API Key；留空保存可关闭同步。密钥保存在此浏览器中，请仅在可信设备上配置。
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label for="jsonbinBinId">Bin ID (可选)</label>
+                    <input type="text" id="jsonbinBinId" placeholder="首次使用留空，自动创建">
+                    <small class="form-hint">如果已有 Bin ID，填入以同步已有数据</small>
+                </div>
+                <div class="form-section">
+                    <h4 style="margin: 0 0 12px; font-size: 0.95rem; color: var(--text-primary);">📧 邮件通知设置</h4>
+                    <div class="form-group">
+                        <label for="notificationEmail">通知邮箱</label>
+                        <input type="email" id="notificationEmail" placeholder="you@example.com">
+                        <small class="form-hint">用于接收任务到期邮件提醒</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="masterBinId">主控 Bin ID</label>
+                        <input type="text" id="masterBinId" placeholder="粘贴主控 Bin ID">
+                        <small class="form-hint">
+                            用于邮件提醒服务发现用户。
+                            <a href="#" id="createMasterBin" style="color: var(--primary);">首次使用点击创建</a>
+                        </small>
+                    </div>
+                </div>
+                <div class="sync-status" id="syncStatus"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancelSettings">取消</button>
+                <button class="btn-primary" id="saveSettings">保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 用户登录模态框 -->
+    <div class="modal-overlay active" id="loginModal">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>👋 欢迎使用</h3>
+            </div>
+            <div class="modal-body">
+                <div class="login-welcome">
+                    <p>输入本地档案名开始使用，项目数据保存在此浏览器中。档案名用于切换数据，不提供密码保护。</p>
+                </div>
+                <div class="form-group">
+                    <label for="loginUsername">本地档案名</label>
+                    <input type="text" id="loginUsername" placeholder="例如：小明" maxlength="20" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" id="loginBtn" style="width: 100%;">进入系统</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导出模态框 -->
+    <div class="modal-overlay" id="exportModal">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>📤 导出甘特图</h3>
+                <button class="btn-close" id="closeExportModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>页面尺寸</label>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="exportSize" value="a4-landscape" checked>
+                            <span>A4 横版</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportSize" value="a4-portrait">
+                            <span>A4 竖版</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportSize" value="mobile">
+                            <span>手机尺寸</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>内容版本</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="exportVersion" value="simple" checked> 简洁版</label>
+                        <label><input type="radio" name="exportVersion" value="detailed"> 详细版（含备注）</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>导出样式</label>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="dark" checked>
+                            <span>深色模式</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="light">
+                            <span>浅色模式</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="academic">
+                            <span>学术风格</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="cyber">
+                            <span>赛博朋克</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="cartoon">
+                            <span>卡通风格</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="exportStyle" value="festive">
+                            <span>喜庆风格</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="export-preview" id="exportPreview">
+                    <div class="preview-placeholder">预览将在这里显示</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancelExport">取消</button>
+                <button class="btn-primary" id="doExport">
+                    <span class="export-btn-text">导出 PNG</span>
+                    <span class="export-btn-loading" style="display: none;">导出中...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- 全局 Tooltip -->
+    <div class="gantt-tooltip" id="globalTooltip">
+        <div class="tooltip-time"></div>
+        <div class="tooltip-notes"></div>
+    </div>
+
+    <!-- 过期任务处理弹窗 -->
+    <div class="modal-overlay" id="overdueModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>⏰ 过期任务处理</h3>
+            </div>
+            <div class="modal-body overdue-modal-body">
+                <p class="overdue-intro">以下任务已过期，请选择处理方式：</p>
+                <div class="overdue-task-list" id="overdueTaskList">
+                    <!-- 动态生成过期任务列表 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" id="confirmOverdue">确认处理</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="api.js"></script>
+    <script src="export-enhanced.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,11 @@
+# Local development only. Copy to .dev.vars, then supply your own values.
+# Never commit real keys or recipient/bin identifiers.
+JSONBIN_API_KEY=
+RESEND_API_KEY=
+FROM_EMAIL=
+USER_BINS=
+# Use MASTER_BIN_ID instead of USER_BINS to read a registry.
+MASTER_BIN_ID=
+# Optional: enables authenticated POST /check. Leave empty to disable it.
+ADMIN_TOKEN=
+REMINDER_TIMEZONE=Asia/Shanghai
