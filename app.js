@@ -4,6 +4,42 @@
  */
 
 // ==========================================
+// 日期工具
+// ==========================================
+
+const DateUtils = {
+    // 任务日期按 datetime-local 本地墙钟字符串保存。仅含日期的旧值按本地午夜解析
+    // （new Date 会将其视为 UTC）；带时区的 ISO 值按其表示的时刻解析。
+    parse(value) {
+        const match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+        if (!match) return new Date(value);
+        const [year, month, day] = match.slice(1).map(Number);
+        const date = new Date(year, month - 1, day);
+        // 与 new Date 一致，不存在的日期（如 2 月 30 日）无效，而不是顺延到下个月
+        return date.getMonth() === month - 1 && date.getDate() === day ? date : new Date(NaN);
+    },
+
+    startOfDay(value) {
+        const date = value instanceof Date ? new Date(value) : this.parse(value);
+        date.setHours(0, 0, 0, 0);
+        return date;
+    },
+
+    // 两个日期之间相差的日历天数（按本地日期计算，不受夏令时影响）
+    daysBetween(from, to) {
+        return Math.round((this.startOfDay(to) - this.startOfDay(from)) / 86400000);
+    },
+
+    // 格式化为 datetime-local 输入框的值：YYYY-MM-DDTHH:mm（本地时间）
+    toInputValue(value) {
+        const date = value instanceof Date ? value : this.parse(value);
+        if (!Number.isFinite(date.getTime())) return '';
+        const pad = n => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+};
+
+// ==========================================
 // 用户管理
 // ==========================================
 
@@ -40,10 +76,9 @@ const UserManager = {
 // ==========================================
 
 const DataStore = {
-    // 获取当前用户的存储 key
-    getStorageKey() {
-        const user = UserManager.getCurrentUser();
-        return user ? `gantt_data_${user}` : 'gantt_project_data';
+    // 获取档案的存储 key（默认为当前档案）
+    getStorageKey(profile = UserManager.getCurrentUser()) {
+        return profile ? `gantt_data_${profile}` : 'gantt_project_data';
     },
 
     // 默认数据结构
@@ -56,9 +91,9 @@ const DataStore = {
     },
 
     // 从本地存储加载数据
-    load() {
+    load(profile = UserManager.getCurrentUser()) {
         try {
-            const saved = localStorage.getItem(this.getStorageKey());
+            const saved = localStorage.getItem(this.getStorageKey(profile));
             if (saved) {
                 return JSON.parse(saved);
             }
@@ -68,10 +103,10 @@ const DataStore = {
         return this.getDefaultData();
     },
 
-    // 保存到本地存储
-    save(data) {
+    // 保存到本地存储；profile 应为数据所属的档案
+    save(data, profile = UserManager.getCurrentUser()) {
         try {
-            const key = this.getStorageKey();
+            const key = this.getStorageKey(profile);
             data.lastModified = Date.now();
             localStorage.setItem(key, JSON.stringify(data));
             return true;
@@ -93,6 +128,9 @@ const DataStore = {
 
 const AppState = {
     data: null,
+    // 内存中数据所属的档案。当前档案记录在 localStorage 中、由所有标签页共享；
+    // 其他标签页切换档案后，本页的数据仍只能写回这里记录的档案。
+    profile: null,
     currentProjectId: null,
     viewMode: 'day', // 'day', 'week', 'month'
     editingTaskId: null,
@@ -109,12 +147,14 @@ const AppState = {
     dragInitialWidth: 0,
     currentTimeRange: null,
 
-    // 日历拖动偏移量（天数）
-    calendarOffset: 0,
-
     init() {
-        this.data = DataStore.load();
-        // 默认进入汇总视图
+        this.loadProfile(UserManager.getCurrentUser());
+    },
+
+    // 载入档案数据（未登录时为空数据），默认进入汇总视图
+    loadProfile(profile) {
+        this.profile = profile || null;
+        this.data = this.profile ? DataStore.load(this.profile) : DataStore.getDefaultData();
         this.isSummaryView = true;
         this.currentProjectId = null;
     },
@@ -125,7 +165,9 @@ const AppState = {
     },
 
     save() {
-        DataStore.save(this.data);
+        if (!DataStore.save(this.data, this.profile)) {
+            UI.showToast('本地保存失败，浏览器存储空间可能已满', 'error');
+        }
         // 触发自动同步（防抖）
         this.scheduleAutoSync();
     },
@@ -142,7 +184,9 @@ const AppState = {
     scheduleAutoSync() {
         // 清除之前的定时器
         this.cancelAutoSync();
-        const profile = UserManager.getCurrentUser();
+        // 只为本页数据所属的档案上传；其他标签页已切换档案时，云端配置属于另一个档案
+        const profile = this.profile;
+        if (profile !== UserManager.getCurrentUser()) return;
 
         const statusEl = document.getElementById('autoSyncStatus');
         const textEl = statusEl?.querySelector('.sync-text');
@@ -417,8 +461,7 @@ const UI = {
                     // 将结束日期设置为开始日期后1小时
                     const startDate = new Date(startValue);
                     startDate.setHours(startDate.getHours() + 1);
-                    const pad = (n) => n.toString().padStart(2, '0');
-                    this.elements.endDate.value = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
+                    this.elements.endDate.value = DateUtils.toInputValue(startDate);
                 }
             }
         });
@@ -433,18 +476,17 @@ const UI = {
                 // 重置为开始日期后1小时
                 const startDate = new Date(startValue);
                 startDate.setHours(startDate.getHours() + 1);
-                const pad = (n) => n.toString().padStart(2, '0');
-                this.elements.endDate.value = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`;
+                this.elements.endDate.value = DateUtils.toInputValue(startDate);
             }
         });
 
-        // 视图切换
+        // 视图切换（汇总视图与项目视图共用）
         this.elements.viewControls.forEach(btn => {
             btn.addEventListener('click', () => {
                 this.elements.viewControls.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 AppState.viewMode = btn.dataset.view;
-                this.renderGantt();
+                this.renderMainView();
             });
         });
 
@@ -488,12 +530,25 @@ const UI = {
         });
 
         // 点击模态框外部关闭
-        [this.elements.taskModal, this.elements.projectModal, this.elements.settingsModal, this.elements.exportModal].forEach(modal => {
+        const dismissibleModals = [this.elements.taskModal, this.elements.projectModal, this.elements.settingsModal, this.elements.exportModal];
+        dismissibleModals.forEach(modal => {
             modal.addEventListener('click', (e) => {
                 if (e.target === modal) {
                     modal.classList.remove('active');
                 }
             });
+        });
+
+        // Esc 先关闭大图预览，再关闭可关闭的弹窗（登录与过期任务弹窗需明确操作）。
+        // 输入法组字时的 Esc 用于取消输入，不关闭弹窗。
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || e.isComposing) return;
+            const preview = document.querySelector('.preview-fullscreen-overlay');
+            if (preview) {
+                preview.remove();
+                return;
+            }
+            dismissibleModals.forEach(modal => modal.classList.remove('active'));
         });
 
         // 移动端侧边栏切换
@@ -518,8 +573,19 @@ const UI = {
             this.syncScroll(this.elements.timelineHeader.scrollLeft);
         });
 
+        // 任务行被单独横向滚动（触控板、Shift+滚轮）时，带动表头和其他行保持对齐。
+        // scroll 事件不冒泡，因此在捕获阶段监听。
+        this.elements.ganttTasks.addEventListener('scroll', (e) => {
+            if (e.target.classList?.contains('task-timeline')) {
+                this.elements.timelineHeader.scrollLeft = e.target.scrollLeft;
+            }
+        }, true);
+
         // 日历栏拖拽滚动
         this.initTimelineDragScroll();
+
+        // 日视图滚轮缩放（表头元素常驻，只需绑定一次）
+        this.bindTimelineZoom();
 
         // 汇总视图点击
         this.elements.summaryViewEntry.addEventListener('click', () => {
@@ -590,14 +656,15 @@ const UI = {
 
     render() {
         this.renderProjectList();
+        this.elements.summaryViewEntry.classList.toggle('active', AppState.isSummaryView);
+        this.renderMainView();
+    },
 
-        // 根据是否为汇总视图决定渲染方式
+    // 根据是否为汇总视图渲染主区域
+    renderMainView() {
         if (AppState.isSummaryView) {
-            // 激活汇总视图的 UI 状态
-            this.elements.summaryViewEntry.classList.add('active');
             this.renderSummaryView();
         } else {
-            this.elements.summaryViewEntry.classList.remove('active');
             this.renderGantt();
         }
     },
@@ -676,18 +743,13 @@ const UI = {
         if (viewMode === 'day') {
             // 日视图：显示任务的完整范围 + 前后缓冲
             if (tasks && tasks.length > 0) {
-                const dates = tasks.flatMap(t => [new Date(t.startDate), new Date(t.endDate)]);
+                const dates = tasks.flatMap(t => [DateUtils.parse(t.startDate), DateUtils.parse(t.endDate)]);
                 const minDate = new Date(Math.min(...dates));
                 const maxDate = new Date(Math.max(...dates));
 
                 // 起始日期：取今天和最早任务日期中较早的，再往前7天
                 startDate = new Date(Math.min(today.getTime(), minDate.getTime()));
                 startDate.setDate(startDate.getDate() - 7);
-
-                // 应用日历拖动偏移量（如果有）
-                if (AppState.calendarOffset) {
-                    startDate.setDate(startDate.getDate() + AppState.calendarOffset);
-                }
 
                 // 结束日期：取今天和最晚任务日期中较晚的，再往后14天
                 endDate = new Date(Math.max(today.getTime(), maxDate.getTime()));
@@ -701,7 +763,7 @@ const UI = {
             endDate.setDate(endDate.getDate() + 90); // 显示约3个月
 
             if (tasks && tasks.length > 0) {
-                const dates = tasks.flatMap(t => [new Date(t.startDate), new Date(t.endDate)]);
+                const dates = tasks.flatMap(t => [DateUtils.parse(t.startDate), DateUtils.parse(t.endDate)]);
                 const minDate = new Date(Math.min(...dates));
                 const maxDate = new Date(Math.max(...dates));
 
@@ -716,7 +778,7 @@ const UI = {
             endDate.setMonth(endDate.getMonth() + 6); // 显示6个月
 
             if (tasks && tasks.length > 0) {
-                const dates = tasks.flatMap(t => [new Date(t.startDate), new Date(t.endDate)]);
+                const dates = tasks.flatMap(t => [DateUtils.parse(t.startDate), DateUtils.parse(t.endDate)]);
                 const minDate = new Date(Math.min(...dates));
                 const maxDate = new Date(Math.max(...dates));
 
@@ -728,6 +790,9 @@ const UI = {
                 endDate.setDate(endDate.getDate() + 14);
             }
         }
+
+        // 单元格从本地午夜开始，才能与"今天"及任务日期按日对齐
+        startDate.setHours(0, 0, 0, 0);
 
         // 根据视图模式构建日期数组
         const dates = [];
@@ -764,51 +829,106 @@ const UI = {
     renderTimelineHeader(timeRange) {
         const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
         const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // 根据视图模式设置不同的单元格宽度
-        const baseCellWidths = { day: 40, week: 60, month: 80 };
-        const baseCellWidth = baseCellWidths[timeRange.viewMode] || 40;
-
-        // 应用缩放级别（仅在日视图下）
-        const zoomLevel = timeRange.viewMode === 'day' ? (AppState.zoomLevel || 1) : 1;
-        const cellWidth = baseCellWidth * zoomLevel;
+        const cellWidth = this.getCellWidth(timeRange.viewMode);
 
         // 更新 CSS 变量以便任务条计算使用
         document.documentElement.style.setProperty('--gantt-cell-width', `${cellWidth}px`);
 
         this.elements.timelineHeader.innerHTML = timeRange.dates.map(item => {
             const date = item.date;
-            let isToday = false;
             let label1 = '';
             let label2 = '';
 
             if (item.type === 'day') {
-                isToday = date.getTime() === today.getTime();
                 label1 = dayNames[date.getDay()];
                 label2 = `${date.getMonth() + 1}/${date.getDate()}`;
             } else if (item.type === 'week') {
-                // 检查今天是否在这一周内
-                const weekEnd = new Date(date);
-                weekEnd.setDate(weekEnd.getDate() + 6);
-                isToday = today >= date && today <= weekEnd;
                 label1 = `第${this.getWeekNumber(date)}周`;
                 label2 = `${date.getMonth() + 1}/${date.getDate()}`;
             } else if (item.type === 'month') {
-                // 检查今天是否在这个月内
-                isToday = today.getFullYear() === date.getFullYear() && today.getMonth() === date.getMonth();
                 label1 = `${date.getFullYear()}`;
                 label2 = monthNames[date.getMonth()];
             }
 
             return `
-                <div class="timeline-cell ${isToday ? 'today' : ''}" style="min-width: ${cellWidth}px;">
+                <div class="timeline-cell ${this.isTodayCell(item, timeRange.today) ? 'today' : ''}" style="min-width: ${cellWidth}px;">
                     <span class="day-name">${label1}</span>
                     <span class="day-num">${label2}</span>
                 </div>
             `;
         }).join('');
+    },
+
+    // 单元格宽度；缩放仅作用于日视图。表头、网格线和任务条必须使用同一宽度
+    getCellWidth(viewMode) {
+        const baseCellWidth = { day: 40, week: 60, month: 80 }[viewMode] || 40;
+        return viewMode === 'day' ? baseCellWidth * (AppState.zoomLevel || 1) : baseCellWidth;
+    },
+
+    // 今天是否落在该单元格（日、周、月）内
+    isTodayCell(item, today) {
+        const date = item.date;
+        if (item.type === 'week') {
+            const weekEnd = new Date(date);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            return today >= date && today <= weekEnd;
+        }
+        if (item.type === 'month') {
+            return today.getFullYear() === date.getFullYear() && today.getMonth() === date.getMonth();
+        }
+        return date.getTime() === today.getTime();
+    },
+
+    // 任务条位置以第一个表头单元格为原点、按日历日计算，保证与表头对齐：
+    // 周视图的第一格是周一，月视图的第一格是月初，二者都可能早于时间范围的起点。
+    calculateBarPosition(task, timeRange, cellWidth) {
+        const origin = timeRange.dates[0]?.date;
+        if (!origin) return { left: 0, width: 20 };
+        const startDay = DateUtils.startOfDay(task.startDate);
+        const endDay = DateUtils.startOfDay(task.endDate);
+
+        let offset;
+        let span;
+        if (timeRange.viewMode === 'month') {
+            const daysInMonth = date => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+            const monthPosition = date => date.getFullYear() * 12 + date.getMonth() + (date.getDate() - 1) / daysInMonth(date);
+            offset = monthPosition(startDay) - monthPosition(origin);
+            span = monthPosition(endDay) + 1 / daysInMonth(endDay) - monthPosition(startDay);
+        } else {
+            const daysPerCell = timeRange.viewMode === 'week' ? 7 : 1;
+            offset = DateUtils.daysBetween(origin, startDay) / daysPerCell;
+            span = (DateUtils.daysBetween(startDay, endDay) + 1) / daysPerCell;
+        }
+
+        // 日视图任务条比所占单元格略短，使相邻日期的任务条之间留有间隙
+        const inset = timeRange.viewMode === 'day' ? 4 : 0;
+        return {
+            left: Math.max(0, offset) * cellWidth,
+            width: Math.max(span * cellWidth - inset, 20)
+        };
+    },
+
+    renderGridHtml(timeRange, cellWidth) {
+        return timeRange.dates.map(item =>
+            `<div class="grid-line ${this.isTodayCell(item, timeRange.today) ? 'today' : ''}" style="min-width: ${cellWidth}px;"></div>`
+        ).join('');
+    },
+
+    // 提示框中的时间：同一天只显示时刻，跨天显示日期和时刻
+    formatTaskTime(task) {
+        const start = DateUtils.parse(task.startDate);
+        const end = DateUtils.parse(task.endDate);
+        const pad = n => String(n).padStart(2, '0');
+        const time = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const dateTime = d => `${d.getMonth() + 1}/${d.getDate()} ${time(d)}`;
+        return start.toDateString() === end.toDateString()
+            ? `${time(start)} ~ ${time(end)}`
+            : `${dateTime(start)} ~ ${dateTime(end)}`;
+    },
+
+    isTaskCompleted(task) {
+        // 兼容旧数据：progress === 100 也视为已完成
+        return task.completed === true || task.progress === 100;
     },
 
     getWeekNumber(date) {
@@ -831,8 +951,8 @@ const UI = {
 
         // 排序任务：未完成任务按截止时间排序在前，已完成任务在后
         const sortedTasks = [...tasks].sort((a, b) => {
-            const aCompleted = a.completed === true || a.progress === 100;
-            const bCompleted = b.completed === true || b.progress === 100;
+            const aCompleted = this.isTaskCompleted(a);
+            const bCompleted = this.isTaskCompleted(b);
 
             // 已完成的排在后面
             if (aCompleted !== bCompleted) {
@@ -840,121 +960,16 @@ const UI = {
             }
 
             // 同类任务按截止时间排序（早的在前）
-            return new Date(a.endDate) - new Date(b.endDate);
+            return DateUtils.parse(a.endDate) - DateUtils.parse(b.endDate);
         });
 
-        // 根据视图模式设置单元格宽度
-        const baseCellWidths = { day: 40, week: 60, month: 80 };
-        const baseCellWidth = baseCellWidths[timeRange.viewMode] || 40;
-
-        // 应用缩放级别（仅在日视图下）
-        const zoomLevel = timeRange.viewMode === 'day' ? (AppState.zoomLevel || 1) : 1;
-        const cellWidth = baseCellWidth * zoomLevel;
-
-        // 计算位置和宽度的辅助函数
-        const calculateBarPosition = (taskStart, taskEnd) => {
-            if (timeRange.viewMode === 'day') {
-                const startOffset = Math.max(0, this.daysBetween(timeRange.startDate, taskStart));
-                const duration = this.daysBetween(taskStart, taskEnd) + 1;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth - 4, 20)
-                };
-            } else if (timeRange.viewMode === 'week') {
-                // 按周计算
-                const startOffset = Math.max(0, this.daysBetween(timeRange.startDate, taskStart) / 7);
-                const duration = (this.daysBetween(taskStart, taskEnd) + 1) / 7;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth, 20)
-                };
-            } else if (timeRange.viewMode === 'month') {
-                // 按月计算
-                const monthsDiff = (d1, d2) => {
-                    return (d2.getFullYear() - d1.getFullYear()) * 12 + (d2.getMonth() - d1.getMonth()) + (d2.getDate() - d1.getDate()) / 30;
-                };
-                const startOffset = Math.max(0, monthsDiff(timeRange.startDate, taskStart));
-                const duration = monthsDiff(taskStart, taskEnd) + 1 / 30;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth, 20)
-                };
-            }
-            return { left: 0, width: 20 };
-        };
+        const cellWidth = this.getCellWidth(timeRange.viewMode);
+        const gridHtml = this.renderGridHtml(timeRange, cellWidth);
 
         this.elements.ganttTasks.innerHTML = sortedTasks.map(task => {
-            const taskStart = new Date(task.startDate);
-            const taskEnd = new Date(task.endDate);
-
-            // 使用辅助函数计算位置
-            const { left, width } = calculateBarPosition(taskStart, taskEnd);
-            // 兼容旧数据：优先使用 completed，其次根据 progress 判断
-            const isCompleted = task.completed === true || task.progress === 100;
-
-            // 生成智能 tooltip 内容
-            const generateTooltipContent = () => {
-                const formatTime = (dateStr) => {
-                    const d = new Date(dateStr);
-                    const pad = (n) => n.toString().padStart(2, '0');
-                    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                };
-                const formatDateTime = (dateStr) => {
-                    const d = new Date(dateStr);
-                    const pad = (n) => n.toString().padStart(2, '0');
-                    return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                };
-
-                // 判断是否跨天
-                const startDay = new Date(task.startDate).toDateString();
-                const endDay = new Date(task.endDate).toDateString();
-                const isMultiDay = startDay !== endDay;
-
-                let dateInfo;
-                if (isMultiDay) {
-                    // 跨天：显示完整日期时间
-                    dateInfo = `${formatDateTime(task.startDate)} ~ ${formatDateTime(task.endDate)}`;
-                } else {
-                    // 同天：仅显示时间
-                    dateInfo = `${formatTime(task.startDate)} ~ ${formatTime(task.endDate)}`;
-                }
-
-                // 如果有备注，添加换行后显示
-                if (task.notes && task.notes.trim()) {
-                    return `${dateInfo}\n${task.notes}`;
-                }
-                return dateInfo;
-            };
-
-            // 为网格线生成正确的数据
-            const gridHtml = timeRange.dates.map(item => {
-                const date = item.date || item;
-                const isToday = item.type === 'day'
-                    ? date.getTime() === timeRange.today.getTime()
-                    : (item.type === 'week'
-                        ? (timeRange.today >= date && timeRange.today <= new Date(date.getTime() + 6 * 86400000))
-                        : (timeRange.today.getFullYear() === date.getFullYear() && timeRange.today.getMonth() === date.getMonth()));
-                const cellWidth = { day: 40, week: 60, month: 80 }[timeRange.viewMode] || 40;
-                return `<div class="grid-line ${isToday ? 'today' : ''}" style="min-width: ${cellWidth}px;"></div>`;
-            }).join('');
-
-            // 分离时间和备注用于 tooltip
-            const formatTime = (dateStr) => {
-                const d = new Date(dateStr);
-                const pad = (n) => n.toString().padStart(2, '0');
-                return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const formatDateTime = (dateStr) => {
-                const d = new Date(dateStr);
-                const pad = (n) => n.toString().padStart(2, '0');
-                return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const startDay = new Date(task.startDate).toDateString();
-            const endDay = new Date(task.endDate).toDateString();
-            const isMultiDay = startDay !== endDay;
-            const tooltipTime = isMultiDay
-                ? `${formatDateTime(task.startDate)} ~ ${formatDateTime(task.endDate)}`
-                : `${formatTime(task.startDate)} ~ ${formatTime(task.endDate)}`;
+            const { left, width } = this.calculateBarPosition(task, timeRange, cellWidth);
+            const isCompleted = this.isTaskCompleted(task);
+            const tooltipTime = this.formatTaskTime(task);
             const tooltipNotes = task.notes?.trim() || '';
 
             return `
@@ -980,6 +995,9 @@ const UI = {
                 </div>
             `;
         }).join('');
+
+        // 新渲染的任务行滚动位置为 0，需与表头当前位置对齐
+        this.syncScroll(this.elements.timelineHeader.scrollLeft);
 
         // 绑定任务事件
         this.elements.ganttTasks.querySelectorAll('.task-checkbox').forEach(checkbox => {
@@ -1008,9 +1026,6 @@ const UI = {
 
         // 绑定 Tooltip 事件
         this.bindTooltipEvents();
-
-        // 绑定鼠标滚轮缩放事件（仅在日视图下）
-        this.bindTimelineZoom();
     },
 
     // ==========================================
@@ -1069,15 +1084,10 @@ const UI = {
             AppState.zoomLevel = 1; // 默认缩放级别
         }
 
-        // 移除旧的事件监听器（如果存在）
-        if (this.timelineWheelHandler) {
-            this.elements.timelineHeader.removeEventListener('wheel', this.timelineWheelHandler);
-        }
-
-        // 创建新的事件处理器
-        this.timelineWheelHandler = (e) => {
-            // 只在日视图下启用缩放
-            if (AppState.viewMode !== 'day') return;
+        // 绑定滚轮事件到时间轴头部
+        this.elements.timelineHeader.addEventListener('wheel', (e) => {
+            // 只在日视图下启用缩放；以横向为主的滚动（触控板左右滑动）交给浏览器正常滚动
+            if (AppState.viewMode !== 'day' || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
 
             e.preventDefault();
 
@@ -1085,12 +1095,9 @@ const UI = {
             const delta = e.deltaY > 0 ? -0.1 : 0.1;
             AppState.zoomLevel = Math.max(0.5, Math.min(3, AppState.zoomLevel + delta));
 
-            // 重新渲染甘特图以应用新的缩放级别
-            this.renderGantt();
-        };
-
-        // 绑定滚轮事件到时间轴头部
-        this.elements.timelineHeader.addEventListener('wheel', this.timelineWheelHandler, { passive: false });
+            // 重新渲染当前视图（项目或汇总）以应用新的缩放级别
+            this.renderMainView();
+        }, { passive: false });
     },
 
     // ==========================================
@@ -1163,8 +1170,9 @@ const UI = {
                 createdAt: Date.now()
             };
             AppState.data.projects.push(newProject);
+            // 打开新建的项目（从汇总视图创建时也切换到项目视图）
             AppState.currentProjectId = newProject.id;
-
+            AppState.isSummaryView = false;
 
             this.showToast('项目已创建', 'success');
         }
@@ -1209,14 +1217,8 @@ const UI = {
         }
 
         // 设置默认日期时间（datetime-local格式: YYYY-MM-DDTHH:mm）
-        const formatDateTime = (date) => {
-            const d = new Date(date);
-            const pad = (n) => n.toString().padStart(2, '0');
-            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        };
-
-        const today = formatDateTime(new Date());
-        const nextWeek = formatDateTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+        const today = DateUtils.toInputValue(new Date());
+        const nextWeek = DateUtils.toInputValue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
 
         // 重置提醒设置和任务重复到默认值
         const resetReminderSettings = () => {
@@ -1287,8 +1289,9 @@ const UI = {
             if (task) {
                 this.elements.modalTitle.textContent = '编辑任务';
                 this.elements.taskName.value = task.name;
-                this.elements.startDate.value = task.startDate;
-                this.elements.endDate.value = task.endDate;
+                // datetime-local 输入框不接受带时区的 ISO 值（旧版周期任务曾这样保存），统一转换为本地时间
+                this.elements.startDate.value = DateUtils.toInputValue(task.startDate);
+                this.elements.endDate.value = DateUtils.toInputValue(task.endDate);
 
                 this.elements.taskNotes.value = task.notes || '';
                 this.elements.taskId.value = task.id;
@@ -1433,27 +1436,28 @@ const UI = {
 
         const task = project.tasks.find(t => t.id === taskId);
         if (task) {
-            // 兼容旧数据：如果有 progress 字段，先转换为 completed
-            if (task.progress !== undefined && task.completed === undefined) {
-                task.completed = task.progress === 100;
-            }
-
-            const wasCompleted = task.completed;
-            task.completed = !task.completed;
-
-            // 如果任务从未完成变为完成，且有重复周期，则创建下一个周期的任务并删除当前任务
-            if (!wasCompleted && task.completed && task.recurrence && task.recurrence > 0) {
-                this.createNextRecurringTask(project, task);
-
-                // 直接删除已完成的周期任务
-                const taskIndex = project.tasks.findIndex(t => t.id === task.id);
-                if (taskIndex !== -1) {
-                    project.tasks.splice(taskIndex, 1);
-                }
+            if (this.isTaskCompleted(task)) {
+                task.completed = false;
+                // 旧数据以 progress === 100 表示完成，取消完成时需一并清除，否则任务仍显示为已完成
+                if (task.progress === 100) delete task.progress;
+            } else {
+                this.completeTask(project, task);
             }
 
             AppState.save();
             this.render();
+        }
+    },
+
+    // 标记任务完成；周期任务会创建下一个周期的任务，并直接删除已完成的当前任务
+    completeTask(project, task) {
+        task.completed = true;
+        if (Number(task.recurrence) > 0) {
+            this.createNextRecurringTask(project, task);
+            const taskIndex = project.tasks.indexOf(task);
+            if (taskIndex !== -1) {
+                project.tasks.splice(taskIndex, 1);
+            }
         }
     },
 
@@ -1462,25 +1466,25 @@ const UI = {
         const now = new Date();
 
         // 计算原任务的持续时间（毫秒）
-        const originalStart = new Date(completedTask.startDate);
-        const originalEnd = new Date(completedTask.endDate);
+        const originalStart = DateUtils.parse(completedTask.startDate);
+        const originalEnd = DateUtils.parse(completedTask.endDate);
         const duration = originalEnd - originalStart;
 
         // 新任务的开始时间 = 当前时间 + 重复周期（天）
         const newStartDate = new Date(now);
-        newStartDate.setDate(newStartDate.getDate() + completedTask.recurrence);
-        // 保持原任务的时分秒
-        newStartDate.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds());
+        newStartDate.setDate(newStartDate.getDate() + Number(completedTask.recurrence));
+        // 保持原任务的时分
+        newStartDate.setHours(originalStart.getHours(), originalStart.getMinutes(), 0, 0);
 
         // 新任务的结束时间 = 新开始时间 + 原持续时间
         const newEndDate = new Date(newStartDate.getTime() + duration);
 
-        // 创建新任务
+        // 创建新任务；日期与表单一致，保存为本地 datetime-local 字符串
         const newTask = {
             id: DataStore.generateId(),
             name: completedTask.name,
-            startDate: newStartDate.toISOString(),
-            endDate: newEndDate.toISOString(),
+            startDate: DateUtils.toInputValue(newStartDate),
+            endDate: DateUtils.toInputValue(newEndDate),
             completed: false,
             notes: completedTask.notes || '',
             color: completedTask.color || '#6366f1',
@@ -1516,6 +1520,7 @@ const UI = {
     },
 
     saveSettings() {
+        if (this.followActiveProfile()) return;
         const apiKey = this.elements.jsonbinApiKey.value.trim();
         const binId = this.elements.jsonbinBinId.value.trim();
         const email = this.elements.notificationEmail.value.trim();
@@ -1539,6 +1544,7 @@ const UI = {
 
     // 创建主控 Bin
     async handleCreateMasterBin() {
+        if (this.followActiveProfile()) return;
         const profile = UserManager.getCurrentUser();
         if (!CloudAPI.isConfigured()) {
             this.showToast('请先填写 API Key', 'warning');
@@ -1560,6 +1566,7 @@ const UI = {
     },
 
     async uploadToCloud() {
+        if (this.followActiveProfile()) return;
         const btn = this.elements.uploadBtn;
         const profile = UserManager.getCurrentUser();
 
@@ -1597,6 +1604,7 @@ const UI = {
     },
 
     async downloadFromCloud() {
+        if (this.followActiveProfile()) return;
         const btn = this.elements.downloadBtn;
         const profile = UserManager.getCurrentUser();
 
@@ -1617,15 +1625,11 @@ const UI = {
 
             if (cloudData) {
                 AppState.data = cloudData;
-                DataStore.save(AppState.data);
+                DataStore.save(AppState.data, profile);
 
-                // 更新当前项目
-                if (AppState.data.projects.length > 0) {
-                    if (!AppState.data.projects.find(p => p.id === AppState.currentProjectId)) {
-                        AppState.currentProjectId = AppState.data.projects[0].id;
-                    }
-                } else {
-                    AppState.currentProjectId = null;
+                // 更新当前项目（汇总视图不选中项目）
+                if (!AppState.isSummaryView && !AppState.getCurrentProject()) {
+                    AppState.currentProjectId = AppState.data.projects[0]?.id || null;
                 }
 
                 this.render();
@@ -1645,12 +1649,6 @@ const UI = {
     // 工具方法
     // ==========================================
 
-    daysBetween(date1, date2) {
-        const oneDay = 24 * 60 * 60 * 1000;
-        // 使用 floor 确保任务显示在正确的日期格，避免因时间部分导致四舍五入到下一天
-        return Math.floor((date2 - date1) / oneDay);
-    },
-
     // 生成随机颜色（避免与现有任务重复）
     generateRandomColor() {
         const project = AppState.getCurrentProject();
@@ -1667,7 +1665,6 @@ const UI = {
             '#14b8a6', // 青色
             '#06b6d4', // 天蓝
             '#3b82f6', // 蓝色
-            '#6366f1', // 靛蓝
         ];
 
         // 找到未使用的颜色
@@ -1678,11 +1675,23 @@ const UI = {
             return availableColors[Math.floor(Math.random() * availableColors.length)];
         }
 
-        // 如果所有预设颜色都被使用，生成随机 HSL 颜色
+        // 如果所有预设颜色都被使用，生成随机颜色。须为 #rrggbb，否则 safeColor 会将其替换为默认色
         const hue = Math.floor(Math.random() * 360);
         const saturation = 60 + Math.floor(Math.random() * 20); // 60-80%
         const lightness = 50 + Math.floor(Math.random() * 10); // 50-60%
-        return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        return this.hslToHex(hue, saturation, lightness);
+    },
+
+    hslToHex(hue, saturation, lightness) {
+        const s = saturation / 100;
+        const l = lightness / 100;
+        const a = s * Math.min(l, 1 - l);
+        const channel = n => {
+            const k = (n + hue / 30) % 12;
+            const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+            return Math.round(value * 255).toString(16).padStart(2, '0');
+        };
+        return `#${channel(0)}${channel(8)}${channel(4)}`;
     },
 
     escapeHtml(text) {
@@ -1740,19 +1749,15 @@ const UI = {
         UserManager.setCurrentUser(username);
         CloudAPI.init();
 
-        // 重新加载用户数据
-        AppState.data = DataStore.load();
-        if (AppState.data.projects.length > 0) {
-            AppState.currentProjectId = AppState.data.projects[0].id;
-        } else {
-            AppState.currentProjectId = null;
-        }
+        // 重新加载用户数据，进入汇总视图
+        AppState.loadProfile(username);
 
         // 隐藏登录框
         this.elements.loginModal.classList.remove('active');
 
-        // 更新用户显示
+        // 更新用户显示，并完整渲染（包括侧边栏项目列表）
         this.updateUserDisplay();
+        this.render();
 
         // 检查过期任务
         const overdueTasks = this.checkOverdueTasks();
@@ -1762,8 +1767,6 @@ const UI = {
             this.showOverdueModal(overdueTasks);
             this.showToast(`欢迎回来，${username}！您有 ${overdueTasks.length} 个过期任务需要处理`, 'warning');
         } else {
-            // 无过期任务，直接进入汇总视图
-            this.enterSummaryView();
             this.showToast(`欢迎回来，${username}！`, 'success');
         }
     },
@@ -1775,8 +1778,7 @@ const UI = {
             CloudAPI.init();
 
             // 重置状态
-            AppState.data = DataStore.getDefaultData();
-            AppState.currentProjectId = null;
+            AppState.loadProfile(null);
 
             // 显示登录框
             this.elements.loginModal.classList.add('active');
@@ -1813,6 +1815,58 @@ const UI = {
         }
     },
 
+    // ==========================================
+    // 多标签页同步
+    // ==========================================
+
+    // 其他标签页修改 localStorage 时触发（本页自己的写入不会触发）
+    handleStorageChange(event) {
+        if (event.storageArea !== localStorage) return;
+        if (this.followActiveProfile()) return;
+
+        const profile = AppState.profile;
+        if (!profile || event.key === null) return;
+
+        if (event.key === DataStore.getStorageKey(profile)) {
+            // 同一档案的数据在其他标签页被修改：重新载入，避免之后用本页的旧数据覆盖
+            AppState.data = DataStore.load(profile);
+            if (!AppState.isSummaryView && !AppState.getCurrentProject()) {
+                AppState.isSummaryView = true;
+                AppState.currentProjectId = null;
+            }
+            this.render();
+        } else if (event.key.endsWith(`_${profile}`)) {
+            // 当前档案的云端同步设置在其他标签页被修改
+            CloudAPI.init();
+            this.updateUserDisplay();
+        }
+    },
+
+    // 当前档案已在其他标签页切换或退出时，本页跟随切换，避免把旧档案的数据写入新档案或其云端。
+    // 返回 true 表示发生了切换，调用方应放弃原操作。
+    followActiveProfile() {
+        const profile = UserManager.getCurrentUser();
+        if (profile === AppState.profile) return false;
+
+        AppState.cancelAutoSync();
+        CloudAPI.init();
+        // 打开的表单仍是旧档案的内容
+        this.closeAllModals();
+        AppState.loadProfile(profile);
+        this.elements.loginModal.classList.toggle('active', !profile);
+        this.elements.loginUsername.value = '';
+        this.updateUserDisplay();
+        this.render();
+        this.showToast(profile ? `已在其他标签页切换到档案：${profile}` : '已在其他标签页退出登录', 'warning');
+        return true;
+    },
+
+    closeAllModals() {
+        [this.elements.taskModal, this.elements.projectModal, this.elements.settingsModal,
+            this.elements.exportModal, this.elements.overdueModal].forEach(modal => modal.classList.remove('active'));
+        document.querySelector('.preview-fullscreen-overlay')?.remove();
+    },
+
     checkLoginStatus() {
         if (UserManager.isLoggedIn()) {
             // 已登录，隐藏登录框
@@ -1832,14 +1886,8 @@ const UI = {
         AppState.isSummaryView = true;
         AppState.currentProjectId = null;
 
-        // 更新侧边栏选中状态
-        this.elements.projectList.querySelectorAll('.project-item').forEach(item => {
-            item.classList.remove('active');
-        });
-        this.elements.summaryViewEntry.classList.add('active');
-
-        // 渲染汇总视图
-        this.renderSummaryView();
+        // 完整渲染：同时刷新侧边栏（项目列表、任务数和选中状态）
+        this.render();
     },
 
     renderSummaryView() {
@@ -1847,8 +1895,7 @@ const UI = {
         const allTasks = [];
         AppState.data.projects.forEach(project => {
             (project.tasks || []).forEach(task => {
-                const isCompleted = task.completed === true || task.progress === 100;
-                if (!isCompleted) {
+                if (!this.isTaskCompleted(task)) {
                     allTasks.push({
                         ...task,
                         projectId: project.id,
@@ -1859,7 +1906,7 @@ const UI = {
         });
 
         // 按截止时间排序（早的在前）
-        allTasks.sort((a, b) => new Date(a.endDate) - new Date(b.endDate));
+        allTasks.sort((a, b) => DateUtils.parse(a.endDate) - DateUtils.parse(b.endDate));
 
         // 更新标题
         this.elements.currentProjectName.textContent = '汇总视图';
@@ -1887,73 +1934,13 @@ const UI = {
     },
 
     renderSummaryTasks(tasks, timeRange) {
-        // 复用 renderTasks 的逻辑，但添加点击跳转功能
-        const baseCellWidths = { day: 40, week: 60, month: 80 };
-        const baseCellWidth = baseCellWidths[timeRange.viewMode] || 40;
-        const zoomLevel = timeRange.viewMode === 'day' ? (AppState.zoomLevel || 1) : 1;
-        const cellWidth = baseCellWidth * zoomLevel;
-
-        const calculateBarPosition = (taskStart, taskEnd) => {
-            if (timeRange.viewMode === 'day') {
-                const startOffset = Math.max(0, this.daysBetween(timeRange.startDate, taskStart));
-                const duration = this.daysBetween(taskStart, taskEnd) + 1;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth - 4, 20)
-                };
-            } else if (timeRange.viewMode === 'week') {
-                const startOffset = Math.max(0, this.daysBetween(timeRange.startDate, taskStart) / 7);
-                const duration = (this.daysBetween(taskStart, taskEnd) + 1) / 7;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth, 20)
-                };
-            } else if (timeRange.viewMode === 'month') {
-                const monthsDiff = (d1, d2) => {
-                    return (d2.getFullYear() - d1.getFullYear()) * 12 + (d2.getMonth() - d1.getMonth()) + (d2.getDate() - d1.getDate()) / 30;
-                };
-                const startOffset = Math.max(0, monthsDiff(timeRange.startDate, taskStart));
-                const duration = monthsDiff(taskStart, taskEnd) + 1 / 30;
-                return {
-                    left: startOffset * cellWidth,
-                    width: Math.max(duration * cellWidth, 20)
-                };
-            }
-            return { left: 0, width: 20 };
-        };
+        // 与 renderTasks 共用定位逻辑，但点击后跳转到所属项目
+        const cellWidth = this.getCellWidth(timeRange.viewMode);
+        const gridHtml = this.renderGridHtml(timeRange, cellWidth);
 
         this.elements.ganttTasks.innerHTML = tasks.map(task => {
-            const taskStart = new Date(task.startDate);
-            const taskEnd = new Date(task.endDate);
-            const { left, width } = calculateBarPosition(taskStart, taskEnd);
-
-            const gridHtml = timeRange.dates.map(item => {
-                const date = item.date || item;
-                const isToday = item.type === 'day'
-                    ? date.getTime() === timeRange.today.getTime()
-                    : (item.type === 'week'
-                        ? (timeRange.today >= date && timeRange.today <= new Date(date.getTime() + 6 * 86400000))
-                        : (timeRange.today.getFullYear() === date.getFullYear() && timeRange.today.getMonth() === date.getMonth()));
-                const cellW = { day: 40, week: 60, month: 80 }[timeRange.viewMode] || 40;
-                return `<div class="grid-line ${isToday ? 'today' : ''}" style="min-width: ${cellW}px;"></div>`;
-            }).join('');
-
-            const formatTime = (dateStr) => {
-                const d = new Date(dateStr);
-                const pad = (n) => n.toString().padStart(2, '0');
-                return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const formatDateTime = (dateStr) => {
-                const d = new Date(dateStr);
-                const pad = (n) => n.toString().padStart(2, '0');
-                return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const startDay = new Date(task.startDate).toDateString();
-            const endDay = new Date(task.endDate).toDateString();
-            const isMultiDay = startDay !== endDay;
-            const tooltipTime = isMultiDay
-                ? `${formatDateTime(task.startDate)} ~ ${formatDateTime(task.endDate)}`
-                : `${formatTime(task.startDate)} ~ ${formatTime(task.endDate)}`;
+            const { left, width } = this.calculateBarPosition(task, timeRange, cellWidth);
+            const tooltipTime = this.formatTaskTime(task);
             const tooltipNotes = task.notes?.trim() || '';
 
             return `
@@ -1976,6 +1963,9 @@ const UI = {
                 </div>
             `;
         }).join('');
+
+        // 新渲染的任务行滚动位置为 0，需与表头当前位置对齐
+        this.syncScroll(this.elements.timelineHeader.scrollLeft);
 
         // 绑定点击事件 - 跳转到项目视图
         this.elements.ganttTasks.querySelectorAll('.gantt-task-row').forEach(row => {
@@ -2022,20 +2012,14 @@ const UI = {
     // ==========================================
 
     checkOverdueTasks() {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
+        const today = DateUtils.startOfDay(new Date());
         const overdueTasks = [];
 
         AppState.data.projects.forEach(project => {
             (project.tasks || []).forEach(task => {
-                const isCompleted = task.completed === true || task.progress === 100;
-                if (isCompleted) return;
+                if (this.isTaskCompleted(task)) return;
 
-                const endDate = new Date(task.endDate);
-                endDate.setHours(0, 0, 0, 0);
-
-                if (endDate < today) {
+                if (DateUtils.startOfDay(task.endDate) < today) {
                     overdueTasks.push({
                         ...task,
                         projectId: project.id,
@@ -2052,7 +2036,7 @@ const UI = {
         if (overdueTasks.length === 0) return;
 
         const formatDate = (dateStr) => {
-            const d = new Date(dateStr);
+            const d = DateUtils.parse(dateStr);
             return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
         };
 
@@ -2077,33 +2061,47 @@ const UI = {
 
         // 绑定操作按钮事件
         this.elements.overdueTaskList.querySelectorAll('.overdue-action-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const taskItem = e.target.closest('.overdue-task-item');
-                const action = e.target.dataset.action;
+            btn.addEventListener('click', () => {
+                const taskItem = btn.closest('.overdue-task-item');
+                let { action, days } = btn.dataset;
 
-                // 移除同一任务的其他选中状态
-                taskItem.querySelectorAll('.overdue-action-btn').forEach(b => b.classList.remove('active'));
-
-                if (action === 'complete') {
-                    e.target.classList.add('active');
-                    taskItem.dataset.selectedAction = 'complete';
-                } else if (action === 'extend') {
-                    e.target.classList.add('active');
-                    taskItem.dataset.selectedAction = 'extend';
-                    taskItem.dataset.extendDays = e.target.dataset.days;
-                } else if (action === 'custom') {
-                    const days = prompt('请输入延长的天数：', '7');
-                    if (days && !isNaN(parseInt(days))) {
-                        e.target.classList.add('active');
-                        e.target.textContent = `+${days}天`;
-                        taskItem.dataset.selectedAction = 'extend';
-                        taskItem.dataset.extendDays = days;
+                if (action === 'custom') {
+                    const input = prompt('请输入延长的天数（1-365）：', '7');
+                    // 取消输入时保留原有选择
+                    if (input === null) return;
+                    const value = Number(input.trim());
+                    if (!Number.isInteger(value) || value < 1 || value > 365) {
+                        this.showToast('请输入 1 到 365 之间的整数天数', 'warning');
+                        return;
                     }
+                    action = 'extend';
+                    days = String(value);
+                    btn.textContent = `+${value}天`;
                 }
+
+                // 同一任务只保留当前选中的操作
+                taskItem.querySelectorAll('.overdue-action-btn').forEach(b => b.classList.toggle('active', b === btn));
+                taskItem.dataset.selectedAction = action;
+                taskItem.dataset.extendDays = days || '';
             });
         });
 
         this.elements.overdueModal.classList.add('active');
+    },
+
+    // 延长过期任务：新的截止日期为"今天 + days 天"（保留原时刻）。若在已过去的截止日期上累加，
+    // 过期较久的任务延期后仍然过期。开始时间已过去时按相同天数平移，保持任务时长。
+    extendOverdueTask(task, days, now = new Date()) {
+        const endDate = DateUtils.parse(task.endDate);
+        const shift = Math.max(0, DateUtils.daysBetween(endDate, now)) + days;
+        endDate.setDate(endDate.getDate() + shift);
+        task.endDate = DateUtils.toInputValue(endDate);
+
+        const startDate = DateUtils.parse(task.startDate);
+        if (startDate < now) {
+            startDate.setDate(startDate.getDate() + shift);
+            task.startDate = DateUtils.toInputValue(startDate);
+        }
     },
 
     confirmOverdueActions() {
@@ -2124,21 +2122,11 @@ const UI = {
             if (!task) return;
 
             if (action === 'complete') {
-                task.completed = true;
+                // 与勾选完成一致：周期任务会创建下一个周期
+                this.completeTask(project, task);
                 hasChanges = true;
             } else if (action === 'extend') {
-                const days = parseInt(item.dataset.extendDays) || 1;
-                const endDate = new Date(task.endDate);
-                endDate.setDate(endDate.getDate() + days);
-                task.endDate = endDate.toISOString();
-
-                // 如果开始时间也过期了，一起延长
-                const startDate = new Date(task.startDate);
-                const today = new Date();
-                if (startDate < today) {
-                    startDate.setDate(startDate.getDate() + days);
-                    task.startDate = startDate.toISOString();
-                }
+                this.extendOverdueTask(task, parseInt(item.dataset.extendDays) || 1);
                 hasChanges = true;
             }
         });
@@ -2165,15 +2153,14 @@ const UI = {
             const allTasks = [];
             AppState.data.projects.forEach(project => {
                 (project.tasks || []).forEach(task => {
-                    const isCompleted = task.completed === true || task.progress === 100;
-                    if (!isCompleted) {
-                        allTasks.push({ ...task });
+                    if (!this.isTaskCompleted(task)) {
+                        allTasks.push(this.toExportTask(task));
                     }
                 });
             });
 
             // 按截止时间排序
-            allTasks.sort((a, b) => new Date(a.endDate) - new Date(b.endDate));
+            allTasks.sort((a, b) => DateUtils.parse(a.endDate) - DateUtils.parse(b.endDate));
 
             return {
                 name: '汇总视图',
@@ -2184,16 +2171,25 @@ const UI = {
             const project = AppState.getCurrentProject();
             if (!project) return null;
 
-            const incompleteTasks = (project.tasks || []).filter(task => {
-                const isCompleted = task.completed === true || task.progress === 100;
-                return !isCompleted;
-            });
+            const incompleteTasks = (project.tasks || [])
+                .filter(task => !this.isTaskCompleted(task))
+                .map(task => this.toExportTask(task));
 
             return {
                 name: project.name,
                 tasks: incompleteTasks
             };
         }
+    },
+
+    // 导出用的任务副本：日期统一为本地时间字符串，颜色与页面显示一致
+    toExportTask(task) {
+        return {
+            ...task,
+            startDate: DateUtils.toInputValue(task.startDate),
+            endDate: DateUtils.toInputValue(task.endDate),
+            color: this.safeColor(task.color)
+        };
     },
 
     openExportModal() {
@@ -2353,7 +2349,7 @@ const UI = {
 
             // 下载图片
             const link = document.createElement('a');
-            link.download = `${exportData.name}_甘特图_${new Date().toISOString().split('T')[0]}.png`;
+            link.download = `${exportData.name}_甘特图_${DateUtils.toInputValue(new Date()).slice(0, 10)}.png`;
             link.href = canvas.toDataURL('image/png');
             link.click();
 
@@ -2367,120 +2363,6 @@ const UI = {
             btnLoading.style.display = 'none';
             exportBtn.disabled = false;
         }
-    },
-
-    async createExportCanvas(project, size, version) {
-        // 定义尺寸配置
-        const sizeConfigs = {
-            'a4-landscape': { width: 1123, height: 794 },
-            'a4-portrait': { width: 794, height: 1123 },
-            'mobile': { width: 375, height: 667 }
-        };
-
-        const config = sizeConfigs[size] || sizeConfigs['a4-landscape'];
-        const canvas = document.createElement('canvas');
-        canvas.width = config.width;
-        canvas.height = config.height;
-        const ctx = canvas.getContext('2d');
-
-        // 背景
-        ctx.fillStyle = '#0f0f23';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // 标题
-        ctx.fillStyle = '#f1f5f9';
-        ctx.font = 'bold 24px Inter, sans-serif';
-        ctx.fillText(project.name, 30, 50);
-
-        // 日期
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = '14px Inter, sans-serif';
-        ctx.fillText(`导出时间: ${new Date().toLocaleString('zh-CN')}`, 30, 75);
-
-        // 绘制任务列表
-        const tasks = project.tasks || [];
-        const startY = 100;
-        const rowHeight = version === 'detailed' ? 70 : 40;
-        const leftPadding = 30;
-        const taskNameWidth = 180;
-        const barStartX = leftPadding + taskNameWidth + 20;
-        const barMaxWidth = canvas.width - barStartX - 30;
-
-        // 计算时间范围
-        if (tasks.length === 0) {
-            ctx.fillStyle = '#64748b';
-            ctx.fillText('暂无任务', leftPadding, startY + 30);
-            return canvas;
-        }
-
-        const allDates = tasks.flatMap(t => [new Date(t.startDate), new Date(t.endDate)]);
-        const minDate = new Date(Math.min(...allDates));
-        const maxDate = new Date(Math.max(...allDates));
-        const totalDays = Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)) + 1;
-
-        // 绘制表头
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(leftPadding, startY, canvas.width - 60, 30);
-        ctx.fillStyle = '#f1f5f9';
-        ctx.font = 'bold 12px Inter, sans-serif';
-        ctx.fillText('任务名称', leftPadding + 10, startY + 20);
-        ctx.fillText('时间线', barStartX, startY + 20);
-
-        // 绘制每个任务
-        tasks.forEach((task, index) => {
-            const y = startY + 35 + index * rowHeight;
-
-            // 任务名称
-            ctx.fillStyle = '#f1f5f9';
-            ctx.font = '13px Inter, sans-serif';
-            const displayName = task.name.length > 15 ? task.name.substring(0, 15) + '...' : task.name;
-            ctx.fillText(displayName, leftPadding + 10, y + 20);
-
-            // 计算条形位置
-            const taskStart = new Date(task.startDate);
-            const taskEnd = new Date(task.endDate);
-            const startOffset = Math.ceil((taskStart - minDate) / (1000 * 60 * 60 * 24));
-            const duration = Math.ceil((taskEnd - taskStart) / (1000 * 60 * 60 * 24)) + 1;
-
-            const barX = barStartX + (startOffset / totalDays) * barMaxWidth;
-            const barWidth = Math.max((duration / totalDays) * barMaxWidth, 20);
-
-            // 绘制条形背景
-            ctx.fillStyle = task.color || '#6366f1';
-            ctx.beginPath();
-            ctx.roundRect(barX, y + 5, barWidth, 24, 4);
-            ctx.fill();
-
-            // 绘制进度
-            if (task.progress > 0) {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                ctx.beginPath();
-                ctx.roundRect(barX, y + 5, barWidth * (task.progress / 100), 24, 4);
-                ctx.fill();
-            }
-
-            // 进度文字
-            ctx.fillStyle = 'white';
-            ctx.font = '11px Inter, sans-serif';
-            ctx.fillText(`${task.progress || 0}%`, barX + 8, y + 22);
-
-            // 详细版显示备注
-            if (version === 'detailed' && task.notes) {
-                ctx.fillStyle = '#64748b';
-                ctx.font = '11px Inter, sans-serif';
-                const noteText = task.notes.length > 50 ? task.notes.substring(0, 50) + '...' : task.notes;
-                ctx.fillText(`备注: ${noteText}`, leftPadding + 10, y + 45);
-            }
-        });
-
-        // 绘制时间刻度
-        ctx.fillStyle = '#64748b';
-        ctx.font = '10px Inter, sans-serif';
-        const dateFormat = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
-        ctx.fillText(dateFormat(minDate), barStartX, startY + 35 + tasks.length * rowHeight + 20);
-        ctx.fillText(dateFormat(maxDate), canvas.width - 70, startY + 35 + tasks.length * rowHeight + 20);
-
-        return canvas;
     }
 };
 
@@ -2491,6 +2373,9 @@ const UI = {
 document.addEventListener('DOMContentLoaded', () => {
     UI.cacheElements();
     UI.bindEvents();
+
+    // 其他标签页切换档案或修改数据时保持同步
+    window.addEventListener('storage', (event) => UI.handleStorageChange(event));
 
     // 检查登录状态
     UI.checkLoginStatus();
