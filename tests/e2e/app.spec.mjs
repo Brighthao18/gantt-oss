@@ -13,11 +13,20 @@ async function addProject(page, name = '示例研究计划') {
     await page.locator('#saveProject').click();
     await page.locator('.project-item').filter({ hasText: name }).click();
 }
+async function futureDates(page) {
+    return page.evaluate(() => {
+        const format = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}T09:00`;
+        const start = new Date(); start.setDate(start.getDate() + 2);
+        const end = new Date(); end.setDate(end.getDate() + 8);
+        return [format(start), format(end)];
+    });
+}
 async function addTask(page, name = '文献整理') {
+    const [start, end] = await futureDates(page);
     await page.locator('#addTaskBtn').click();
     await page.locator('#taskName').fill(name);
-    await page.locator('#startDate').fill('2099-10-05T09:00');
-    await page.locator('#endDate').fill('2099-10-12T18:00');
+    await page.locator('#startDate').fill(start);
+    await page.locator('#endDate').fill(end);
     await page.locator('#taskNotes').fill('示例备注，仅用于测试');
     await page.locator('#saveTask').click();
     await expect(page.locator('.task-name').filter({ hasText: name })).toBeVisible();
@@ -105,16 +114,17 @@ test('hostile profile, attribute and style strings are rendered as inert text', 
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await enter(page, '<img src=x>');
-    await page.evaluate(() => {
+    const dates = await futureDates(page);
+    await page.evaluate(([startDate, endDate]) => {
         globalThis.injectionRan = false;
         AppState.data.projects = [{ id: 'project" data-injected="yes', name: '<script>example()</script>', tasks: [{
             id: 'task" data-injected="yes', name: '<img src=x onerror="injectionRan=true">',
-            startDate: '2099-10-05T09:00', endDate: '2099-10-12T18:00',
+            startDate, endDate,
             notes: '" onmouseover="injectionRan=true', color: 'red;" data-injected="yes', completed: false
         }] }];
         UI.selectProject(AppState.data.projects[0].id);
         UI.showToast('<img src=x onerror="injectionRan=true">');
-    });
+    }, dates);
     await expect(page.locator('[data-injected]')).toHaveCount(0);
     await expect(page.locator('.task-name img, .toast-message img, .project-name script')).toHaveCount(0);
     await expect(page.locator('.gantt-bar')).toHaveCSS('background-color', 'rgb(99, 102, 241)');
