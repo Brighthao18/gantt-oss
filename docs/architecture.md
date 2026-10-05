@@ -15,8 +15,10 @@ flowchart LR
 
 数据顶层包含 `projects`、`lastModified`、`version`，项目包含 `id`、`name`、`tasks`，任务包含 `id`、`name`、`startDate`、`endDate`、`notes`、`color`、`completed`、`reminder` 与 `recurrence`。读取旧任务时仍兼容 `progress === 100`。
 
-任务日期主要为 HTML `datetime-local` 的本地墙钟字符串。提醒 Worker 按 `REMINDER_TIMEZONE` 比较日历日期；带 UTC 标志或时区偏移的 ISO 时间先转换到该时区。默认 `Asia/Shanghai`，Cron 表达式始终使用 UTC。
+任务日期主要为 HTML `datetime-local` 的本地墙钟字符串。提醒 Worker 按 `REMINDER_TIMEZONE` 比较日历日期；带 UTC 标志或时区偏移的 ISO 时间先转换到该时区。默认 `Asia/Shanghai`，Cron 表达式始终使用 UTC。旧版本曾将周期任务的下一周期和过期延期保存为 UTC ISO 字符串；页面按其表示的时刻显示，编辑保存或再次延期时改写为本地墙钟字符串。
 
 各档案独立保存 JSONBin Key、Bin ID、通知邮箱和主控 Bin ID。旧版全局 Key、通知邮箱、主控 Bin ID 首次升级时迁移给当前档案；如果没有当前档案，迁移至下一次选中的档案。其他档案需要单独配置。项目数据存储键不变。
+
+同一浏览器的多个标签页共享当前档案：其他标签页切换或退出档案后，本页随之切换，本页的修改只写回数据所属的档案；同一档案的数据在其他标签页保存后，本页重新载入。两个标签页同时编辑同一任务时，以最后保存的为准。
 
 同步上传为整条记录覆盖，下载替换当前本地数据；并不支持并发编辑合并。等待中的上传会在切换档案或关闭同步时取消。已经发出的网络请求无法撤回，返回后需核对档案是否仍然相同。

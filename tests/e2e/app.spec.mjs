@@ -31,6 +31,27 @@ async function addTask(page, name = '文献整理') {
     await page.locator('#saveTask').click();
     await expect(page.locator('.task-name').filter({ hasText: name })).toBeVisible();
 }
+// Stores fictional data for a profile that has not been opened yet. Task dates are [days from today, 'HH:MM'].
+async function seedProfile(page, profile, projects) {
+    await page.evaluate(([profile, projects]) => {
+        const at = ([days, time]) => {
+            const date = new Date(); date.setDate(date.getDate() + days);
+            return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}T${time}`;
+        };
+        localStorage.setItem(`gantt_data_${profile}`, JSON.stringify({ version: 1, lastModified: 1,
+            projects: projects.map(project => ({ ...project, tasks: project.tasks.map(({ start, end, ...task }) => ({
+                startDate: at(start), endDate: at(end), color: '#6366f1', completed: false, recurrence: 0, ...task })) })) }));
+    }, [profile, projects]);
+}
+// Header label of the cell containing each bar's left edge, in display order.
+function barStartLabels(page) {
+    return page.evaluate(() => {
+        const cells = [...document.querySelectorAll('#timelineHeader .timeline-cell')];
+        const cellWidth = cells[0].getBoundingClientRect().width;
+        return [...document.querySelectorAll('.gantt-bar')].map(bar =>
+            cells[Math.floor(parseFloat(bar.style.left) / cellWidth + 1e-6)].querySelector('.day-num').textContent);
+    });
+}
 
 test('local use creates and persists tasks, changes views, completes and deletes tasks', async ({ page }) => {
     const errors = [];
@@ -205,4 +226,197 @@ test('a delayed download cannot overwrite another profile after logout', async (
     await expect(page.locator('#downloadBtn')).toBeEnabled();
     await expect(page.locator('.project-item')).toHaveCount(0);
     expect(await page.evaluate(() => DataStore.load().projects)).toEqual([]);
+});
+
+test('bars start in the header cell of their start date in every view, with zoom and scrolling', async ({ page }) => {
+    await page.goto('/');
+    await seedProfile(page, '时间轴档案', [{ id: 'timeline-project', name: '示例时间轴', tasks: [
+        { id: 'started', name: '进行中任务', start: [-2, '09:00'], end: [3, '18:00'] },
+        { id: 'later', name: '后续任务', start: [20, '09:00'], end: [40, '18:00'] }
+    ] }]);
+    await page.locator('#loginUsername').fill('时间轴档案');
+    await page.locator('#loginBtn').click();
+    // The sidebar lists existing projects right after login.
+    await expect(page.locator('.project-name')).toHaveText(['示例时间轴']);
+    const expected = await page.evaluate(() => {
+        const starts = [-2, 20].map(days => { const date = new Date(); date.setDate(date.getDate() + days); return date; });
+        const label = date => `${date.getMonth() + 1}/${date.getDate()}`;
+        const monday = date => { const day = new Date(date); day.setDate(day.getDate() - (day.getDay() + 6) % 7); return day; };
+        return { day: starts.map(label), week: starts.map(date => label(monday(date))), month: starts.map(date => `${date.getMonth() + 1}月`) };
+    });
+    for (const [title, select] of [['汇总视图', null], ['示例时间轴', '.project-item']]) {
+        if (select) await page.locator(select).click();
+        for (const mode of ['week', 'month', 'day']) {
+            await page.locator(`[data-view="${mode}"]`).click();
+            await expect(page.locator('#currentProjectName')).toHaveText(title);
+            await expect(page.locator('.gantt-bar')).toHaveCount(2);
+            expect(await barStartLabels(page)).toEqual(expected[mode]);
+        }
+        await expect(page.locator('#timelineHeader .timeline-cell.today')).toHaveCount(1);
+    }
+
+    await page.locator('#timelineHeader').hover();
+    await page.mouse.wheel(0, -200);
+    await expect.poll(() => page.evaluate(() => AppState.zoomLevel)).toBeGreaterThan(1);
+    const [headerCell, gridCell] = await page.evaluate(() => ['#timelineHeader .timeline-cell', '.grid-line']
+        .map(selector => document.querySelector(selector).getBoundingClientRect().width));
+    expect(headerCell).toBeGreaterThan(40);
+    expect(gridCell).toBe(headerCell);
+    expect(await barStartLabels(page)).toEqual(expected.day);
+
+    // Rows follow the header after it scrolls and after the chart re-renders.
+    await page.locator('#timelineHeader').evaluate(header => { header.scrollLeft = 120; });
+    await page.locator('[data-view="day"]').click();
+    expect(await page.evaluate(() => [...document.querySelectorAll('.task-timeline')].map(row => row.scrollLeft)))
+        .toEqual([120, 120]);
+
+    await page.locator('#summaryViewEntry').click();
+    await page.locator('#timelineHeader').hover();
+    await page.mouse.wheel(0, 200);
+    await expect(page.locator('#currentProjectName')).toHaveText('汇总视图');
+    await expect(page.locator('.gantt-bar')).toHaveCount(2);
+});
+
+test('completed recurring tasks continue as editable local-time tasks', async ({ page }) => {
+    await enter(page); await addProject(page);
+    const [start, end] = await futureDates(page);
+    await page.locator('#addTaskBtn').click();
+    await page.locator('#taskName').fill('每周例会');
+    await page.locator('#startDate').fill(start);
+    await page.locator('#endDate').fill(end);
+    await page.locator('#taskRecurrence').selectOption('7');
+    await page.locator('#saveTask').click();
+    await page.locator('.task-checkbox').click();
+    await expect(page.locator('.toast-message').filter({ hasText: '已创建下一个周期任务' })).toBeVisible();
+    await expect(page.locator('.task-checkbox.checked')).toHaveCount(0);
+    const next = await page.evaluate(() => AppState.getCurrentProject().tasks[0]);
+    expect(next.startDate).toMatch(/^\d{4}-\d{2}-\d{2}T09:00$/);
+    await page.locator('.task-name').click();
+    await expect(page.locator('#startDate')).toHaveValue(next.startDate);
+    await expect(page.locator('#endDate')).toHaveValue(next.endDate);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#taskModal')).not.toHaveClass(/active/);
+
+    // Earlier versions saved recurring tasks as UTC ISO strings, which datetime-local inputs reject.
+    const local = await page.evaluate(() => {
+        const start = new Date(); start.setDate(start.getDate() + 3); start.setHours(9, 0, 0, 0);
+        const end = new Date(start); end.setHours(11);
+        Object.assign(AppState.getCurrentProject().tasks[0], { startDate: start.toISOString(), endDate: end.toISOString() });
+        UI.render();
+        const format = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}T${String(date.getHours()).padStart(2,'0')}:00`;
+        return [format(start), format(end)];
+    });
+    await page.locator('.task-name').click();
+    await expect(page.locator('#startDate')).toHaveValue(local[0]);
+    await expect(page.locator('#endDate')).toHaveValue(local[1]);
+    await page.locator('#saveTask').click();
+    await expect(page.locator('#taskModal')).not.toHaveClass(/active/);
+    expect(await page.evaluate(() => AppState.getCurrentProject().tasks[0].startDate)).toBe(local[0]);
+});
+
+test('overdue tasks are extended from today, and completing a recurring one continues it', async ({ page }) => {
+    await page.goto('/');
+    await seedProfile(page, '过期示例', [{ id: 'overdue-project', name: '过期项目', tasks: [
+        { id: 'late', name: '十天前到期', start: [-20, '08:00'], end: [-10, '18:00'] },
+        { id: 'weekly', name: '每周汇报', start: [-9, '09:00'], end: [-8, '10:00'], recurrence: 7 }
+    ] }]);
+    await page.locator('#loginUsername').fill('过期示例');
+    await page.locator('#loginBtn').click();
+    await expect(page.locator('#overdueModal')).toHaveClass(/active/);
+    await expect(page.locator('.project-name')).toHaveText(['过期项目']);
+    const late = page.locator('.overdue-task-item[data-task-id="late"]');
+    await late.locator('[data-days="1"]').click();
+    page.once('dialog', dialog => dialog.accept('0'));
+    await late.locator('[data-action="custom"]').click();
+    await expect(page.locator('.toast-message').filter({ hasText: '1 到 365' })).toBeVisible();
+    await expect(late.locator('.overdue-action-btn.active')).toHaveText('+1天');
+    await page.locator('.overdue-task-item[data-task-id="weekly"] [data-action="complete"]').click();
+    await page.locator('#confirmOverdue').click();
+
+    const result = await page.evaluate(() => {
+        const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+        return { tasks: AppState.data.projects[0].tasks, overdue: UI.checkOverdueTasks().length,
+            tomorrow: `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,'0')}-${String(tomorrow.getDate()).padStart(2,'0')}` };
+    });
+    expect(result.overdue).toBe(0);
+    expect(result.tasks.find(task => task.id === 'late').endDate).toBe(`${result.tomorrow}T18:00`);
+    expect(result.tasks.find(task => task.id === 'weekly')).toBeUndefined();
+    expect(result.tasks.find(task => task.name === '每周汇报')).toMatchObject({ completed: false, recurrence: 7 });
+});
+
+test('a profile switch in another tab is followed instead of overwriting either profile', async ({ context }) => {
+    const first = await context.newPage();
+    await enter(first, '档案甲'); await addProject(first, '甲的项目');
+    const second = await context.newPage();
+    await second.goto('/');
+    await expect(second.locator('#userName')).toHaveText('档案甲');
+    second.once('dialog', dialog => dialog.accept());
+    await second.locator('#logoutBtn').click();
+    await expect(first.locator('#loginModal')).toHaveClass(/active/);
+    await second.locator('#loginUsername').fill('档案乙');
+    await second.locator('#loginBtn').click();
+    await addProject(second, '乙的项目');
+    await expect(first.locator('#userName')).toHaveText('档案乙');
+    await expect(first.locator('.project-name')).toHaveText(['乙的项目']);
+    await first.locator('.project-item').click();
+    await addTask(first, '第一个标签页的任务');
+    const stored = await first.evaluate(() => ['档案甲', '档案乙'].map(profile =>
+        JSON.parse(localStorage.getItem(`gantt_data_${profile}`)).projects.map(project => [project.name, project.tasks.length])));
+    expect(stored).toEqual([[['甲的项目', 0]], [['乙的项目', 1]]]);
+});
+
+test('changes saved in another tab of the same profile are kept', async ({ context }) => {
+    const first = await context.newPage();
+    await enter(first, '共享档案'); await addProject(first, '项目一');
+    const second = await context.newPage();
+    await second.goto('/');
+    await addProject(second, '项目二');
+    await expect(first.locator('.project-name')).toHaveText(['项目一', '项目二']);
+    await addProject(first, '项目三');
+    await expect(second.locator('.project-name')).toHaveText(['项目一', '项目二', '项目三']);
+    expect(await first.evaluate(() => DataStore.load().projects.map(project => project.name)))
+        .toEqual(['项目一', '项目二', '项目三']);
+});
+
+test('a tab that missed a profile switch saves to its own profile and resyncs before cloud actions', async ({ page }) => {
+    let providerCalls = 0;
+    await page.route('https://api.jsonbin.io/**', route => { providerCalls++; return route.fulfill({ json: {} }); });
+    await enter(page, '档案甲'); await addProject(page, '甲的项目');
+    // Same-page writes do not fire storage events, as if the event from another tab had not arrived yet.
+    await page.evaluate(() => {
+        localStorage.setItem('gantt_data_档案乙', JSON.stringify({ version: 1, lastModified: 1,
+            projects: [{ id: 'second-project', name: '乙的项目', tasks: [] }] }));
+        localStorage.setItem('jsonbin_api_key_档案乙', 'test-key');
+        localStorage.setItem('jsonbin_bin_id_档案乙', 'test-bin');
+        localStorage.setItem('gantt_current_user', '档案乙');
+    });
+    await page.locator('.project-menu').click();
+    await page.locator('#projectName').fill('甲改名');
+    await page.locator('#saveProject').click();
+    expect(await page.evaluate(() => AppState.autoSyncTimer)).toBeNull();
+    await page.locator('#uploadBtn').click();
+    await expect(page.locator('#userName')).toHaveText('档案乙');
+    await expect(page.locator('.project-name')).toHaveText(['乙的项目']);
+    const stored = await page.evaluate(() => ['档案甲', '档案乙'].map(profile =>
+        JSON.parse(localStorage.getItem(`gantt_data_${profile}`)).projects.map(project => project.name)));
+    expect(stored).toEqual([['甲改名'], ['乙的项目']]);
+    expect(providerCalls).toBe(0);
+});
+
+test('PNG export grows to fit many tasks instead of clipping them', async ({ page }) => {
+    await enter(page); await addProject(page);
+    const [startDate, endDate] = await futureDates(page);
+    await page.evaluate(([startDate, endDate]) => {
+        AppState.getCurrentProject().tasks = Array.from({ length: 40 }, (_, index) => ({ id: `bulk-${index}`,
+            name: `示例任务${index + 1}`, startDate, endDate, color: '#6366f1', notes: '', completed: false }));
+        AppState.save(); UI.render();
+    }, [startDate, endDate]);
+    await page.locator('#exportBtn').click();
+    await expect(page.locator('#exportPreview canvas')).toBeVisible();
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#doExport').click();
+    const bytes = await readFile(await (await downloadPromise).path());
+    // A4 landscape is 1123 x 794 px; 40 rows of 30 px need more height than one page.
+    expect(bytes.readUInt32BE(16)).toBe(1123);
+    expect(bytes.readUInt32BE(20)).toBeGreaterThan(40 * 30);
 });
