@@ -22,7 +22,7 @@
     "worker:deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "wrangler": "4.147.0"
   }
 }
