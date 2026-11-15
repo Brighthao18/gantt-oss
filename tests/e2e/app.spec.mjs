@@ -91,6 +91,7 @@ test('PNG preview and downloaded PNG are readable', async ({ page }) => {
     const downloadPromise = page.waitForEvent('download');
     await page.locator('#doExport').click();
     const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^示例研究计划_甘特图_\d{4}-\d{2}-\d{2}\.png$/);
     const bytes = await readFile(await download.path());
     expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     expect(bytes.readUInt32BE(16)).toBeGreaterThan(300);
@@ -202,6 +203,16 @@ test('configured upload and download round-trip fictional project data', async (
     await expect(page.locator('#uploadBtn')).toBeEnabled();
     expect(cloud.notificationEmail).toBe('you@example.com');
     cloud.projects[0].name = '云端示例项目';
+    // Downloading replaces local data, so it asks first and warns when the cloud copy is older.
+    cloud.lastModified = 1;
+    let prompt = '';
+    page.once('dialog', dialog => { prompt = dialog.message(); return dialog.dismiss(); });
+    await page.locator('#downloadBtn').click();
+    await expect(page.locator('.toast-message').filter({ hasText: '已取消下载' })).toBeVisible();
+    expect(prompt).toContain('1 个项目');
+    expect(prompt).toContain('云端数据比本地旧');
+    await expect(page.locator('.project-name')).toHaveText('本地示例项目');
+    page.once('dialog', dialog => dialog.accept());
     await page.locator('#downloadBtn').click();
     await expect(page.locator('.project-name')).toHaveText('云端示例项目');
     expect(await page.evaluate(() => DataStore.load().projects[0].name)).toBe('云端示例项目');
@@ -419,4 +430,72 @@ test('PNG export grows to fit many tasks instead of clipping them', async ({ pag
     // A4 landscape is 1123 x 794 px; 40 rows of 30 px need more height than one page.
     expect(bytes.readUInt32BE(16)).toBe(1123);
     expect(bytes.readUInt32BE(20)).toBeGreaterThan(40 * 30);
+});
+
+test('a local backup file restores a profile, including on a fresh origin, and never includes credentials', async ({ page }) => {
+    await enter(page, '备份档案'); await addProject(page, '备份项目'); await addTask(page, '备份任务');
+    await page.evaluate(() => {
+        CloudAPI.saveConfig('test-secret-key', 'test-bin');
+        CloudAPI.saveProfileSetting('notification_email', 'you@example.com');
+    });
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#exportBackupBtn').click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^甘特图备份_备份档案_\d{4}-\d{2}-\d{2}\.json$/);
+    const text = await readFile(await download.path(), 'utf8');
+    const backup = JSON.parse(text);
+    expect(backup).toMatchObject({ app: 'gantt-oss', formatVersion: 1, profile: '备份档案' });
+    expect(backup.data.projects.map(project => [project.name, project.tasks.map(task => task.name)])).toEqual([['备份项目', ['备份任务']]]);
+    expect(text).not.toContain('test-secret-key');
+    expect(text).not.toContain('you@example.com');
+
+    // Restoring replaces existing data only after confirmation.
+    await page.evaluate(() => { AppState.data.projects[0].name = '之后改名'; AppState.data.projects[0].tasks = []; AppState.save(); UI.render(); });
+    const file = { name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(text) };
+    let prompt = '';
+    page.once('dialog', dialog => { prompt = dialog.message(); return dialog.dismiss(); });
+    await page.locator('#importBackupFile').setInputFiles(file);
+    await expect.poll(() => prompt).toContain('1 个项目、0 个任务');
+    expect(prompt).toContain('1 个项目、1 个任务');
+    await expect(page.locator('.project-name')).toHaveText(['之后改名']);
+
+    await page.locator('#importBackupFile').setInputFiles({ ...file, buffer: Buffer.from('{"projects":"invalid"}') });
+    await expect(page.locator('.toast-message').filter({ hasText: '格式无效' })).toBeVisible();
+    expect(await page.evaluate(() => DataStore.load().projects[0].name)).toBe('之后改名');
+
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#importBackupFile').setInputFiles(file);
+    await expect(page.locator('.project-name')).toHaveText(['备份项目']);
+    expect(await page.evaluate(() => DataStore.load().projects[0].tasks[0].name)).toBe('备份任务');
+
+    // A profile on another origin starts empty; the stored record copied from the old site restores it without a prompt.
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#logoutBtn').click();
+    await page.locator('#loginUsername').fill('新站点档案'); await page.locator('#loginBtn').click();
+    await page.locator('#importBackupFile').setInputFiles({ ...file, buffer: Buffer.from(JSON.stringify(backup.data)) });
+    await expect(page.locator('.project-name')).toHaveText(['备份项目']);
+    await page.reload();
+    await expect(page.locator('.gantt-bar')).toHaveCount(1);
+});
+
+test('tasks, projects and the summary entry work from the keyboard', async ({ page }) => {
+    await enter(page); await addProject(page); await addTask(page);
+    await page.locator('#summaryViewEntry').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#currentProjectName')).toHaveText('汇总视图');
+    await page.locator('.project-item').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#currentProjectName')).toHaveText('示例研究计划');
+    const checkbox = page.locator('.task-checkbox');
+    await expect(checkbox).toHaveAttribute('aria-checked', 'false');
+    await checkbox.focus();
+    await page.keyboard.press('Space');
+    await expect(checkbox).toHaveAttribute('aria-checked', 'true');
+    await expect(checkbox).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(checkbox).toHaveAttribute('aria-checked', 'false');
+    await page.locator('.task-name').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#taskModal')).toHaveClass(/active/);
+    await expect(page.locator('#taskName')).toHaveValue('文献整理');
 });

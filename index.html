@@ -22,7 +22,7 @@
                 </div>
             </div>
             <!-- 汇总视图入口 -->
-            <div class="summary-view-entry" id="summaryViewEntry">
+            <div class="summary-view-entry" id="summaryViewEntry" role="button" tabindex="0">
                 <span class="summary-icon">📊</span>
                 <span class="summary-name">汇总视图</span>
             </div>
@@ -45,6 +45,17 @@
                         <span class="sync-icon">📥</span>
                         <span>下载本地</span>
                     </button>
+                </div>
+                <div class="sync-buttons">
+                    <button class="btn-sync btn-backup" id="exportBackupBtn" title="把当前档案的项目和任务保存为 JSON 文件">
+                        <span class="sync-icon">💾</span>
+                        <span>导出备份</span>
+                    </button>
+                    <button class="btn-sync btn-backup" id="importBackupBtn" title="用 JSON 备份文件替换当前档案的数据">
+                        <span class="sync-icon">📂</span>
+                        <span>恢复备份</span>
+                    </button>
+                    <input type="file" id="importBackupFile" accept="application/json,.json" hidden>
                 </div>
                 <div class="auto-sync-status" id="autoSyncStatus">
                     <span class="sync-dot"></span>

@@ -136,6 +136,22 @@ test('random task colors are always hex values the renderer accepts', () => {
     assert.equal(UI.hslToHex(120, 100, 25), '#008000');
 });
 
+test('backups accept exported files and bare stored records, and reject malformed data', () => {
+    const { UI } = setup();
+    const data = { projects: [{ id: 'p', name: 'Project', tasks: [
+        { id: 't', name: 'Task', startDate: '2026-10-05T09:00', endDate: '2026-10-06T09:00' }
+    ] }], lastModified: 1, version: 1 };
+    const exported = UI.parseBackup({ app: 'gantt-oss', formatVersion: 1, exportedAt: '2026-10-05T01:00:00.000Z', profile: 'profile-one', data });
+    assert.equal(exported.data, data);
+    assert.deepEqual([exported.profile, exported.exportedAt], ['profile-one', '2026-10-05T01:00:00.000Z']);
+    assert.deepEqual({ ...UI.parseBackup(data) }, { data, profile: null, exportedAt: null });
+    assert.equal(UI.describeData({ projects: data.projects }), '1 个项目、1 个任务');
+    for (const malformed of [null, [], { app: 'gantt-oss', data: null }, { projects: [{ id: 'p', name: 'Project' }] },
+        { projects: [{ id: 'p', name: 'Project', tasks: [{ id: 't', name: 'Task', startDate: 'invalid', endDate: '2026-10-06' }] }] }]) {
+        assert.throws(() => UI.parseBackup(malformed), /数据格式无效/);
+    }
+});
+
 test('saves go to the profile that owns the loaded data after another tab switches profiles', () => {
     const { AppState, CloudAPI, values, localStorage } = setup({ gantt_current_user: 'profile-one',
         'jsonbin_api_key_profile-two': 'test-key' });

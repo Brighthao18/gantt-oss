@@ -315,6 +315,29 @@ body::before {
     animation: spin 1s linear infinite;
 }
 
+/* 本地备份按钮：与云端同步按钮区分 */
+.btn-sync.btn-backup {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-sync.btn-backup:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    transform: none;
+    box-shadow: none;
+}
+
+/* 键盘操作时的焦点提示 */
+.task-checkbox:focus-visible,
+.task-name:focus-visible,
+.project-item:focus-visible,
+.summary-view-entry:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
 @keyframes spin {
     from {
         transform: rotate(0deg);

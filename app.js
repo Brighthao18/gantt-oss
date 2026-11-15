@@ -165,11 +165,13 @@ const AppState = {
     },
 
     save() {
-        if (!DataStore.save(this.data, this.profile)) {
+        const saved = DataStore.save(this.data, this.profile);
+        if (!saved) {
             UI.showToast('本地保存失败，浏览器存储空间可能已满', 'error');
         }
         // 触发自动同步（防抖）
         this.scheduleAutoSync();
+        return saved;
     },
 
     // 自动同步定时器
@@ -336,6 +338,11 @@ const UI = {
             // 同步按钮
             uploadBtn: document.getElementById('uploadBtn'),
             downloadBtn: document.getElementById('downloadBtn'),
+
+            // 本地备份
+            exportBackupBtn: document.getElementById('exportBackupBtn'),
+            importBackupBtn: document.getElementById('importBackupBtn'),
+            importBackupFile: document.getElementById('importBackupFile'),
 
             // Toast
             toastContainer: document.getElementById('toastContainer'),
@@ -512,6 +519,16 @@ const UI = {
         this.elements.uploadBtn.addEventListener('click', () => this.uploadToCloud());
         this.elements.downloadBtn.addEventListener('click', () => this.downloadFromCloud());
 
+        // 本地备份
+        this.elements.exportBackupBtn.addEventListener('click', () => this.exportBackup());
+        this.elements.importBackupBtn.addEventListener('click', () => this.elements.importBackupFile.click());
+        this.elements.importBackupFile.addEventListener('change', () => {
+            const file = this.elements.importBackupFile.files[0];
+            // 清空选择，之后才能再次选择同一个文件
+            this.elements.importBackupFile.value = '';
+            if (file) this.importBackup(file);
+        });
+
         // 导出功能
         this.elements.exportBtn.addEventListener('click', () => this.openExportModal());
         this.elements.closeExportModal.addEventListener('click', () => this.closeExportModal());
@@ -549,6 +566,15 @@ const UI = {
                 return;
             }
             dismissibleModals.forEach(modal => modal.classList.remove('active'));
+        });
+
+        // 非按钮的可点击元素（任务勾选框、任务名、项目、汇总入口）支持键盘：Enter 或空格等同点击
+        document.addEventListener('keydown', (e) => {
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.isComposing) return;
+            if (e.target instanceof HTMLElement && e.target.matches('[role="button"][tabindex], [role="checkbox"][tabindex]')) {
+                e.preventDefault();
+                e.target.click();
+            }
         });
 
         // 移动端侧边栏切换
@@ -681,6 +707,7 @@ const UI = {
 
         this.elements.projectList.innerHTML = projects.map(project => `
             <li class="project-item ${project.id === AppState.currentProjectId ? 'active' : ''}"
+                role="button" tabindex="0"
                 data-project-id="${this.escapeHtml(project.id)}">
                 <span class="project-icon">📋</span>
                 <span class="project-name">${this.escapeHtml(project.name)}</span>
@@ -976,8 +1003,10 @@ const UI = {
                 <div class="gantt-task-row" data-task-id="${this.escapeHtml(task.id)}">
                     <div class="task-info">
                         <div class="task-checkbox ${isCompleted ? 'checked' : ''}"
+                             role="checkbox" aria-checked="${isCompleted}" tabindex="0"
+                             aria-label="${this.escapeHtml(`完成任务：${task.name}`)}"
                              data-task-id="${this.escapeHtml(task.id)}"></div>
-                        <span class="task-name ${isCompleted ? 'completed' : ''}">${this.escapeHtml(task.name)}</span>
+                        <span class="task-name ${isCompleted ? 'completed' : ''}" role="button" tabindex="0">${this.escapeHtml(task.name)}</span>
                     </div>
                     <div class="task-timeline">
                         <div class="timeline-grid">
@@ -1444,8 +1473,13 @@ const UI = {
                 this.completeTask(project, task);
             }
 
+            // 重新渲染会替换勾选框；用键盘操作时把焦点放回同一任务
+            const keepFocus = document.activeElement?.classList?.contains('task-checkbox');
             AppState.save();
             this.render();
+            if (keepFocus) {
+                this.elements.ganttTasks.querySelector(`.task-checkbox[data-task-id="${CSS.escape(taskId)}"]`)?.focus();
+            }
         }
     },
 
@@ -1624,6 +1658,22 @@ const UI = {
             if (UserManager.getCurrentUser() !== profile) return;
 
             if (cloudData) {
+                // 下载会整体替换本地数据：本地已有项目时先确认，云端较旧时特别提示
+                if (AppState.data.projects.length > 0) {
+                    const stale = (cloudData.lastModified || 0) < (AppState.data.lastModified || 0);
+                    const message = [
+                        `将用云端数据替换档案“${profile}”的全部本地数据。`,
+                        `本地：${this.describeData(AppState.data)}`,
+                        `云端：${this.describeData(cloudData)}`,
+                        stale ? '注意：云端数据比本地旧，本地较新的修改会丢失。' : '',
+                        '确定下载吗？'
+                    ].filter(Boolean).join('\n');
+                    if (!confirm(message)) {
+                        this.showToast('已取消下载，本地数据未更改', 'warning');
+                        return;
+                    }
+                }
+
                 AppState.data = cloudData;
                 DataStore.save(AppState.data, profile);
 
@@ -1643,6 +1693,97 @@ const UI = {
             btn.classList.remove('syncing');
             btn.disabled = false;
         }
+    },
+
+    // ==========================================
+    // 本地备份
+    // ==========================================
+
+    countData(data) {
+        const taskCount = data.projects.reduce((sum, project) => sum + (project.tasks?.length || 0), 0);
+        return `${data.projects.length} 个项目、${taskCount} 个任务`;
+    },
+
+    // 用于确认提示：项目数、任务数与最后修改时间
+    describeData(data) {
+        const modified = Number.isFinite(data.lastModified) && data.lastModified > 0
+            ? `，修改于 ${new Date(data.lastModified).toLocaleString('zh-CN')}` : '';
+        return this.countData(data) + modified;
+    },
+
+    // 把当前档案的项目数据导出为 JSON 文件。不包含 API Key、Bin ID 和通知邮箱。
+    exportBackup() {
+        if (this.followActiveProfile()) return;
+        const { notificationEmail, ...data } = AppState.data;
+        const backup = {
+            app: 'gantt-oss',
+            formatVersion: 1,
+            exportedAt: new Date().toISOString(),
+            profile: AppState.profile,
+            data
+        };
+        const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.download = `甘特图备份_${AppState.profile}_${DateUtils.toInputValue(new Date()).slice(0, 10)}.json`;
+        link.href = url;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        this.showToast(`已导出备份：${this.countData(data)}（不含云端设置）`, 'success');
+    },
+
+    // 解析备份内容：接受本应用导出的备份文件，也接受直接保存的档案数据（{ projects: [...] }）
+    parseBackup(parsed) {
+        const wrapped = Boolean(parsed) && parsed.app === 'gantt-oss' && 'data' in parsed;
+        return {
+            data: CloudAPI.validateData(wrapped ? parsed.data : parsed),
+            profile: wrapped && typeof parsed.profile === 'string' ? parsed.profile : null,
+            exportedAt: wrapped && typeof parsed.exportedAt === 'string' ? parsed.exportedAt : null
+        };
+    },
+
+    async importBackup(file) {
+        if (this.followActiveProfile()) return;
+        const profile = AppState.profile;
+        if (!profile) return;
+
+        let backup;
+        try {
+            backup = this.parseBackup(JSON.parse(await file.text()));
+        } catch (error) {
+            console.error('读取备份失败:', error);
+            this.showToast('备份文件无法读取或格式无效，当前数据未更改', 'error');
+            return;
+        }
+        // 读取文件期间，档案可能已在其他标签页切换
+        if (UserManager.getCurrentUser() !== profile || AppState.profile !== profile) return;
+
+        // 恢复会整体替换当前数据：已有项目时先确认
+        if (AppState.data.projects.length > 0) {
+            const exportedAt = new Date(backup.exportedAt);
+            const source = [
+                backup.profile && backup.profile !== profile ? `来自档案“${backup.profile}”` : '',
+                Number.isFinite(exportedAt.getTime()) ? `导出于 ${exportedAt.toLocaleString('zh-CN')}` : ''
+            ].filter(Boolean).join('，');
+            const message = [
+                `将用备份文件替换档案“${profile}”的全部本地数据。`,
+                `当前：${this.describeData(AppState.data)}`,
+                `备份：${this.describeData(backup.data)}${source ? `（${source}）` : ''}`,
+                '此操作无法撤销，建议先导出当前数据。确定恢复吗？'
+            ].join('\n');
+            if (!confirm(message)) return;
+        }
+
+        const previous = AppState.data;
+        AppState.data = backup.data;
+        if (!AppState.save()) {
+            // 未能写入本地存储：保持页面与存储一致，继续使用原数据
+            AppState.data = previous;
+            return;
+        }
+        AppState.isSummaryView = true;
+        AppState.currentProjectId = null;
+        this.render();
+        this.showToast(`已从备份恢复：${this.countData(backup.data)}`, 'success');
     },
 
     // ==========================================
@@ -1946,7 +2087,7 @@ const UI = {
             return `
                 <div class="gantt-task-row" data-task-id="${this.escapeHtml(task.id)}" data-project-id="${this.escapeHtml(task.projectId)}">
                     <div class="task-info">
-                        <span class="task-name">${this.escapeHtml(task.name)}</span>
+                        <span class="task-name" role="button" tabindex="0">${this.escapeHtml(task.name)}</span>
                     </div>
                     <div class="task-timeline">
                         <div class="timeline-grid">

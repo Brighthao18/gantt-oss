@@ -12,6 +12,7 @@ A lightweight, local-first Gantt planner for coursework, research, and personal 
 - Daily, weekly, monthly, and cross-project summary views.
 - PNG exports with multiple sizes and six visual themes.
 - Separate local profiles and optional per-profile cloud sync settings.
+- Local JSON backup and restore for each profile.
 - Optional due-date and overdue email reminders.
 
 Local profile names select browser storage; they do not authenticate users or protect data from another person using the same browser. Team deployments need server-side authentication and authorization.
@@ -26,7 +27,7 @@ cd gantt-oss
 node scripts/serve.mjs
 ```
 
-Open <http://127.0.0.1:4173>. No npm install, account, or API key is required for local use. Storage belongs to the browser and website origin. Clearing site data or changing origin can make it unavailable. PNG exports are not recoverable data backups.
+Open <http://127.0.0.1:4173>. No npm install, account, or API key is required for local use. Storage belongs to the browser and website origin. Clearing site data or changing origin can make it unavailable. PNG exports are not recoverable data backups; use “导出备份” (export backup) in the sidebar to save a JSON file, and “恢复备份” (restore backup) to load it, for example after moving to another origin.
 
 ## Contribute and verify
 
