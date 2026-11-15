@@ -22,7 +22,7 @@
                 </div>
             </div>
             <!-- 汇总视图入口 -->
-            <div class="summary-view-entry" id="summaryViewEntry">
+            <div class="summary-view-entry" id="summaryViewEntry" role="button" tabindex="0">
                 <span class="summary-icon">📊</span>
                 <span class="summary-name">汇总视图</span>
             </div>
@@ -45,6 +45,17 @@
                         <span class="sync-icon">📥</span>
                         <span>下载本地</span>
                     </button>
+                </div>
+                <div class="sync-buttons">
+                    <button class="btn-sync btn-backup" id="exportBackupBtn" title="把当前档案的项目和任务保存为 JSON 文件">
+                        <span class="sync-icon">💾</span>
+                        <span>导出备份</span>
+                    </button>
+                    <button class="btn-sync btn-backup" id="importBackupBtn" title="用 JSON 备份文件替换当前档案的数据">
+                        <span class="sync-icon">📂</span>
+                        <span>恢复备份</span>
+                    </button>
+                    <input type="file" id="importBackupFile" accept="application/json,.json" hidden>
                 </div>
                 <div class="auto-sync-status" id="autoSyncStatus">
                     <span class="sync-dot"></span>
@@ -107,7 +118,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3 id="modalTitle">添加任务</h3>
-                <button class="btn-close" id="closeModal">&times;</button>
+                <button class="btn-close" id="closeModal" aria-label="关闭">&times;</button>
             </div>
             <form class="modal-body task-form-scrollable" id="taskForm">
                 <div class="form-group">
@@ -171,7 +182,7 @@
                             style="width: 60px;">
                         <span>天重复一次</span>
                     </div>
-                    <small class="form-hint">循环任务会自动在甘特图上显示多个周期</small>
+                    <small class="form-hint">标记完成后，会按周期自动创建下一次任务</small>
                 </div>
 
                 <!-- 提醒设置 -->
@@ -245,7 +256,7 @@
         <div class="modal modal-small">
             <div class="modal-header">
                 <h3 id="projectModalTitle">新建项目</h3>
-                <button class="btn-close" id="closeProjectModal">&times;</button>
+                <button class="btn-close" id="closeProjectModal" aria-label="关闭">&times;</button>
             </div>
             <form class="modal-body" id="projectForm">
                 <div class="form-group">
@@ -267,7 +278,7 @@
         <div class="modal modal-small">
             <div class="modal-header">
                 <h3>云端同步设置</h3>
-                <button class="btn-close" id="closeSettingsModal">&times;</button>
+                <button class="btn-close" id="closeSettingsModal" aria-label="关闭">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -333,7 +344,7 @@
         <div class="modal modal-small">
             <div class="modal-header">
                 <h3>📤 导出甘特图</h3>
-                <button class="btn-close" id="closeExportModal">&times;</button>
+                <button class="btn-close" id="closeExportModal" aria-label="关闭">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">

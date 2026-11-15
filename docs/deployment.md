@@ -12,9 +12,27 @@ node scripts/serve.mjs
 
 不要发布仓库根目录，也不要在公共演示浏览器中保存维护者 JSONBin Key。本地模式不需要部署 Worker。
 
+## 更新已有部署
+
+项目和任务保存在访问者浏览器的 localStorage 中，按网站地址（协议、域名、端口）区分，不在服务器上。更新时保持网站地址不变，数据就保持不变：
+
+- 在原有的 Pages 项目或托管位置发布新的 `dist/`，不要新建项目。新建 Cloudflare Pages 项目会得到新的 `*.pages.dev` 域名，原数据仍留在旧域名下，在新域名看不到。
+- 更新后刷新页面即可。新版本读取原有的 `gantt_data_<档案名>` 记录，不做批量迁移。
+
+需要更换地址时，先在旧地址导出，再在新地址用“恢复备份”导入；云端设置（API Key、Bin ID、通知邮箱）不在备份中，需要在新地址重新填写。1.0.0 及更早的版本没有“导出备份”按钮，可以在旧地址打开浏览器开发者工具的控制台，执行下面的代码，为每个档案下载一份 JSON 记录（不含密钥），新版本的“恢复备份”可以直接读取：
+
+```js
+Object.keys(localStorage).filter(k => k.startsWith('gantt_data_') || k === 'gantt_project_data').forEach((key, i) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([localStorage.getItem(key)], { type: 'application/json' }));
+    a.download = key + '.json';
+    a.click();
+}, i * 600));
+```
+
 ## JSONBin 云端同步
 
-在自己的 [JSONBin](https://jsonbin.io/) 账户获取 Key，在应用设置中配置。首次上传自动创建私有 Bin；已有 Bin 应填入正确 ID。手动下载会替换当前档案的本地记录，请先确认云端内容。
+在自己的 [JSONBin](https://jsonbin.io/) 账户获取 Key，在应用设置中配置。首次上传自动创建私有 Bin；已有 Bin 应填入正确 ID。手动下载会替换当前档案的本地记录；本地已有项目时会先显示本地与云端的项目数和修改时间并要求确认。
 
 这是个人自托管模式，Key 在浏览器中可读。请使用独立账户或适当受限的访问权限。无需邮件时，不配置通知邮箱、主控 Bin 或 Worker。
 

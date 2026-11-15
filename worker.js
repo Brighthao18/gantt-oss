@@ -339,14 +339,16 @@ export default {
             weekday: 'long'
         });
 
+        // 应用已不再记录进度；只有旧数据带有数值进度时才显示，避免每封邮件都显示“0%”
+        const progress = Number.isFinite(task.progress) ? Math.max(0, Math.min(100, task.progress)) : null;
+
         // 纯文本版本（Gmail更喜欢同时有HTML和纯文本）
         const textContent = `
 任务提醒
 
 任务名称: ${task.name}
 项目: ${task.projectName}
-截止时间: ${formattedDate} (${dueText})
-当前进度: ${Number.isFinite(task.progress) ? Math.max(0, Math.min(100, task.progress)) : 0}%
+截止时间: ${formattedDate} (${dueText})${progress === null ? '' : `\n当前进度: ${progress}%`}
 ${task.notes ? `\n备注: ${task.notes}\n` : ''}
 
 ---
@@ -401,16 +403,16 @@ ${task.notes ? `\n备注: ${task.notes}\n` : ''}
                             <!-- Details -->
                             <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
                                 <tr>
-                                    <td width="48%" style="background-color: #fef3c7; padding: 15px; border-radius: 6px; vertical-align: top;">
+                                    <td width="${progress === null ? '100%' : '48%'}" style="background-color: #fef3c7; padding: 15px; border-radius: 6px; vertical-align: top;">
                                         <p style="margin: 0 0 5px 0; color: #92400e; font-size: 12px; font-weight: 600;">截止时间</p>
                                         <p style="margin: 0; color: #78350f; font-size: 16px; font-weight: 700;">${dueText}</p>
                                         <p style="margin: 5px 0 0 0; color: #92400e; font-size: 12px;">${formattedDate}</p>
-                                    </td>
+                                    </td>${progress === null ? '' : `
                                     <td width="4%"></td>
                                     <td width="48%" style="background-color: #d1fae5; padding: 15px; border-radius: 6px; vertical-align: top;">
                                         <p style="margin: 0 0 5px 0; color: #065f46; font-size: 12px; font-weight: 600;">当前进度</p>
-                                        <p style="margin: 0; color: #047857; font-size: 16px; font-weight: 700;">${Number.isFinite(task.progress) ? Math.max(0, Math.min(100, task.progress)) : 0}%</p>
-                                    </td>
+                                        <p style="margin: 0; color: #047857; font-size: 16px; font-weight: 700;">${progress}%</p>
+                                    </td>`}
                                 </tr>
                             </table>
 

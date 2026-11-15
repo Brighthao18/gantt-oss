@@ -7,7 +7,9 @@ export default defineConfig({
     workers: 2,
     reporter: 'list',
     use: { baseURL: 'http://127.0.0.1:4175', browserName: 'chromium',
-        headless: true, timezoneId: 'Asia/Shanghai', trace: 'retain-on-failure' },
+        headless: true, timezoneId: 'Asia/Shanghai', trace: 'retain-on-failure',
+        // Without a UTF-8 locale, Chromium on Linux reports Chinese download names as "download".
+        launchOptions: { env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } } },
     webServer: { command: 'node scripts/serve.mjs --port 4175 --dist', url: 'http://127.0.0.1:4175',
         reuseExistingServer: false, timeout: 15000 }
 });

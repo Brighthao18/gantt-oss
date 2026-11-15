@@ -9,10 +9,7 @@
  * 5. 斜线表头（左上到右下）
  * 6. 支持6种样式主题
  *
- * 集成方法：
- * 1. 在 index.html 中引入此文件：<script src="export-enhanced.js"></script>
- * 2. 在 app.js 的 UI 对象中，将 createExportCanvas 方法替换为调用 EnhancedExport.createCanvas
- * 3. 或者直接在 updateExportPreview 和 doExport 中调用 EnhancedExport.createCanvas
+ * index.html 在 app.js 之前加载此文件，UI.updateExportPreview 与 UI.doExport 调用 EnhancedExport.createCanvas。
  */
 
 const EnhancedExport = {
@@ -116,6 +113,21 @@ const EnhancedExport = {
         const headerHeight = 60;
         const combinedHeaderHeight = 45; // 合并后的表头+时间轴高度
         const rowHeight = version === 'detailed' ? 35 : 30;
+        const notesMaxWidth = canvas.width - (margins.left + 10) - margins.right - 30;
+
+        // 任务较多或备注较长时加高画布，避免超出页面的任务和备注被截掉。
+        // 高度按下方绘制使用的行高与间距计算；修改画布尺寸会重置绘图状态，因此在绘制前完成。
+        const tasks = project.tasks || [];
+        if (tasks.length > 0) {
+            let contentBottom = margins.top + headerHeight + combinedHeaderHeight + 5 + tasks.length * rowHeight + 20;
+            const tasksWithNotes = version === 'detailed' ? tasks.filter(t => t.notes && t.notes.trim()) : [];
+            if (tasksWithNotes.length > 0) {
+                ctx.font = `11px ${styleConfig.font}`;
+                contentBottom += 45 + tasksWithNotes.reduce((sum, task) =>
+                    sum + 28 + this.wrapText(ctx, task.notes, notesMaxWidth).length * 16, 0);
+            }
+            canvas.height = Math.max(config.height, Math.ceil(contentBottom + margins.bottom));
+        }
 
         // 背景
         ctx.fillStyle = styleConfig.background;
@@ -132,7 +144,6 @@ const EnhancedExport = {
         ctx.fillText(`导出时间: ${new Date().toLocaleString('zh-CN')}`, margins.left + 10, margins.top + 55);
 
         // 任务数据
-        const tasks = project.tasks || [];
         if (tasks.length === 0) {
             ctx.fillStyle = styleConfig.textColor;
             ctx.fillText('暂无任务', margins.left + 10, margins.top + headerHeight + 50);
@@ -329,24 +340,7 @@ const EnhancedExport = {
                     // 备注内容（自动换行）
                     ctx.fillStyle = styleConfig.textColor;
                     ctx.font = `11px ${styleConfig.font}`;
-                    const maxWidth = canvas.width - leftPadding - margins.right - 30;
-                    const words = task.notes.split('');
-                    let line = '';
-
-                    for (let i = 0; i < words.length; i++) {
-                        const testLine = line + words[i];
-                        const metrics = ctx.measureText(testLine);
-
-                        if (metrics.width > maxWidth && line.length > 0) {
-                            ctx.fillText(line, leftPadding + 20, currentY);
-                            line = words[i];
-                            currentY += 16;
-                        } else {
-                            line = testLine;
-                        }
-                    }
-
-                    if (line.length > 0) {
+                    for (const line of this.wrapText(ctx, task.notes, notesMaxWidth)) {
                         ctx.fillText(line, leftPadding + 20, currentY);
                         currentY += 16;
                     }
@@ -357,6 +351,28 @@ const EnhancedExport = {
         }
 
         return canvas;
+    },
+
+    /**
+     * 按字符换行（适用于中文），保留备注中的手动换行
+     * @returns {string[]} 各行文本
+     */
+    wrapText(ctx, text, maxWidth) {
+        const lines = [];
+        for (const paragraph of String(text).split('\n')) {
+            let line = '';
+            for (const char of paragraph) {
+                const testLine = line + char;
+                if (ctx.measureText(testLine).width > maxWidth && line.length > 0) {
+                    lines.push(line);
+                    line = char;
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+        }
+        return lines;
     }
 };
 
