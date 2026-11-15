@@ -98,6 +98,22 @@ test('email HTML escapes task text and provider errors do not expose response bo
     await assert.rejects(worker.sendEmailReminder('you@example.com', malicious, env), /HTTP 403$/);
 });
 
+test('due emails show progress only for legacy tasks that record one', async t => {
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+        calls.push(JSON.parse(init.body)); return Response.json({ id: 'test-message' });
+    });
+    const due = { ...task(), projectName: 'Sample project', daysUntilDue: 1 };
+    await worker.sendEmailReminder('you@example.com', due, env);
+    await worker.sendEmailReminder('you@example.com', { ...due, progress: 40 }, env);
+    for (const part of ['text', 'html']) {
+        assert.ok(!calls[0][part].includes('当前进度'));
+        assert.ok(calls[0][part].includes('明天到期'));
+        assert.ok(calls[1][part].includes('当前进度'));
+        assert.ok(calls[1][part].includes('40%'));
+    }
+});
+
 test('user registry rejects non-array data and deduplicates bins', async t => {
     assert.deepEqual(await worker.getUserBins({ USER_BINS: ' one, two, one, ' }), ['one', 'two']);
     t.mock.method(globalThis, 'fetch', async () => Response.json({ record: { binIds: 'invalid' } }));
